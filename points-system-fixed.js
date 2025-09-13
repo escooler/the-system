@@ -1,7 +1,6 @@
 /**
- * Marketing Team Points System - Version 4.2 Dynamic Workstreams Fixed
- * Workstream priorities use direct percentages, PMM priorities fill remaining space
- * Properly handles dynamic addition/removal of workstreams
+ * Marketing Team Points System - Version 5.1 with Asset Planning
+ * Fixed: Asset planning with budget at top and only 5 columns
  */
 
 // ==================== MAIN SETUP FUNCTION ====================
@@ -25,11 +24,11 @@ function setupPointsSystem() {
   // Set up the Allocation tab
   setupAllocationTab(allocationSheet);
   
-  // Create default workstream tabs
+  // Create default workstream tabs with asset planning
   const defaultWorkstreams = ['SoMe', 'PUA', 'ASO', 'Portal'];
   defaultWorkstreams.forEach(name => {
     const wsSheet = ss.insertSheet(name);
-    setupWorkstreamTab(wsSheet, name);
+    setupWorkstreamTabWithAssets(wsSheet, name);
   });
   
   // Set the Allocation tab as active
@@ -37,8 +36,7 @@ function setupPointsSystem() {
   
   SpreadsheetApp.getUi().alert(
     'Points System Setup Complete! 🎉',
-    'System ready. Workstream priorities use exact percentages.\n' +
-    'PMM priorities automatically fill remaining capacity.',
+    'System ready with asset planning.\nUse T-shirt sizes to plan assets within your budget.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -146,10 +144,10 @@ function setupAllocationTab(sheet) {
       .setNumberFormat('0%')
       .setBackground('#FFF3E0');
     // Insert checkboxes for each workstream
-    sheet.getRange(row, 7).insertCheckboxes(); // SoMe
-    sheet.getRange(row, 8).insertCheckboxes(); // PUA
-    sheet.getRange(row, 9).insertCheckboxes(); // ASO
-    sheet.getRange(row, 10).insertCheckboxes(); // Portal
+    sheet.getRange(row, 7).insertCheckboxes();
+    sheet.getRange(row, 8).insertCheckboxes();
+    sheet.getRange(row, 9).insertCheckboxes();
+    sheet.getRange(row, 10).insertCheckboxes();
   });
   
   // Add empty rows for more priorities
@@ -163,95 +161,92 @@ function setupAllocationTab(sheet) {
   
   // Add borders to priorities table
   sheet.getRange(5, 5, 16, 6).setBorder(true, true, true, true, true, true);
-  
-  // Instructions
-  sheet.getRange('A23:J23').merge()
-    .setValue('📝 Check boxes to assign priorities to workstreams. Team priorities use exact %, PMM fills remainder.')
-    .setFontSize(10)
-    .setFontColor('#666666')
-    .setBackground('#FFFEF7');
 }
 
-// ==================== HELPER FUNCTION TO FIND CHECKBOX COLUMN ====================
+// ==================== WORKSTREAM TAB WITH ASSETS ====================
 
-function findCheckboxColumn(workstreamName) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  // Search through the header row (row 5) starting from column G (7)
-  for (let col = 7; col <= 20; col++) {
-    if (allocSheet.getRange(5, col).getValue() === workstreamName) {
-      return col;
-    }
-  }
-  return -1; // Not found
-}
-
-// ==================== WORKSTREAM TAB SETUP ====================
-
-function setupWorkstreamTab(sheet, workstreamName) {
+function setupWorkstreamTabWithAssets(sheet, workstreamName) {
   sheet.clear();
   
-  // Set column widths
-  sheet.setColumnWidth(1, 350); // A - Priority Name
-  sheet.setColumnWidth(2, 120); // B - Source
-  sheet.setColumnWidth(3, 120); // C - Allocation %
-  sheet.setColumnWidth(4, 120); // D - Points
+  // IMPORTANT: Delete all columns beyond E first
+  const maxCols = sheet.getMaxColumns();
+  if (maxCols > 5) {
+    sheet.deleteColumns(6, maxCols - 5);
+  }
+  
+  // Set column widths - ONLY 5 columns
+  sheet.setColumnWidth(1, 400); // A - Description
+  sheet.setColumnWidth(2, 120); // B - Go Live Date
+  sheet.setColumnWidth(3, 100); // C - T-Shirt Size
+  sheet.setColumnWidth(4, 80);  // D - Cost
+  sheet.setColumnWidth(5, 120); // E - Status
   
   // Header Section
-  sheet.getRange('A1:D1').merge()
+  sheet.getRange('A1:E1').merge()
     .setValue(`${workstreamName.toUpperCase()} WORKSTREAM`)
     .setFontSize(16)
     .setFontWeight('bold')
     .setBackground('#34A853')
     .setFontColor('#FFFFFF');
   
-  // Display allocated points
+  // Budget Summary Section
   sheet.getRange('A2').setValue('Total Points Allocated:');
   sheet.getRange('B2').setFormula(`=IFERROR(VLOOKUP("${workstreamName}",Allocation!A:C,3,FALSE),0)`)
     .setFontSize(14)
     .setFontWeight('bold')
     .setBackground('#E8F5E9')
     .setNumberFormat('0');
-  sheet.getRange('C2').setValue('Points');
   
-  // Table Header
-  sheet.getRange('A4:D4').setValues([['Priority Name', 'Source', 'Allocation %', 'Points']])
+  sheet.getRange('A3').setValue('Points Spent on Assets:');
+  sheet.getRange('B3').setFormula('=SUMIF(D46:D95,">0")')
+    .setFontSize(14)
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2')
+    .setNumberFormat('0');
+  
+  sheet.getRange('C2').setValue('Remaining:');
+  sheet.getRange('D2').setFormula('=B2-B3')
+    .setFontSize(14)
+    .setFontWeight('bold')
+    .setBackground('#E1F5FE')
+    .setNumberFormat('0');
+  
+  // Priorities Table Header
+  sheet.getRange('A5:D5').setValues([['Priority Name', 'Source', 'Allocation %', 'Points']])
     .setFontWeight('bold')
     .setBackground('#E3F2FD');
   
-  // Workstream Priorities Section (FIRST)
-  sheet.getRange('A5:D5').merge()
+  // Workstream Priorities Section
+  sheet.getRange('A6:D6').merge()
     .setValue('--- Workstream Team Priorities (Direct %) ---')
     .setFontStyle('italic')
     .setBackground('#FFF9C4');
   
   // Add rows for workstream priorities
   for (let i = 0; i < 10; i++) {
-    const row = 6 + i;
+    const row = 7 + i;
     sheet.getRange(row, 1).setBackground('#FFF3E0');
     sheet.getRange(row, 2).setValue('Workstream');
     sheet.getRange(row, 3).setNumberFormat('0%').setBackground('#FFF3E0');
-    // Direct calculation for workstream priorities
     sheet.getRange(row, 4).setFormula(
       `=IF(C${row}="","",ROUND(C${row}*$B$2,0))`
     ).setNumberFormat('0').setBackground('#E8F5E9');
   }
   
   // Remaining capacity indicator
-  sheet.getRange('A17').setValue('Remaining for PMM:').setFontWeight('bold');
-  sheet.getRange('B17').setFormula('=MAX(0,100%-SUMIF(C6:C15,">0"))')
+  sheet.getRange('A18').setValue('Remaining for PMM:').setFontWeight('bold');
+  sheet.getRange('B18').setFormula('=MAX(0,100%-SUMIF(C7:C16,">0"))')
     .setNumberFormat('0%')
     .setFontWeight('bold')
     .setBackground('#E3F2FD');
-  sheet.getRange('C17').setValue('→');
-  sheet.getRange('D17').setFormula('=ROUND(B17*B2,0)')
+  sheet.getRange('C18').setValue('→');
+  sheet.getRange('D18').setFormula('=ROUND(B18*B2,0)')
     .setNumberFormat('0')
     .setFontWeight('bold')
     .setBackground('#E3F2FD');
   
   // PMM Priorities Section
-  sheet.getRange('A19:D19').merge()
+  sheet.getRange('A20:D20').merge()
     .setValue('--- PMM Strategic Priorities (Auto-scaled) ---')
     .setFontStyle('italic')
     .setBackground('#F5F5F5');
@@ -260,30 +255,25 @@ function setupWorkstreamTab(sheet, workstreamName) {
   const checkboxCol = findCheckboxColumn(workstreamName);
   
   if (checkboxCol > 0) {
-    // Create formulas for PMM priorities using column number
     for (let i = 0; i < 15; i++) {
-      const currentRow = 20 + i;
+      const currentRow = 21 + i;
       const allocRow = 6 + i;
       
-      // Priority name - pulls from Allocation sheet if checkbox is checked
       sheet.getRange(currentRow, 1).setFormula(
         `=IF(INDIRECT("Allocation!R${allocRow}C${checkboxCol}",FALSE)=TRUE,Allocation!E${allocRow},"")`
       ).setBackground('#F0F0F0');
       
-      // Source
       sheet.getRange(currentRow, 2).setFormula(
         `=IF(A${currentRow}<>"","PMM","")`
       ).setBackground('#F0F0F0');
       
-      // PMM Weight % - scaled to fit remaining capacity
       sheet.getRange(currentRow, 3).setFormula(
         `=IF(A${currentRow}="","",` +
         `IF(SUMPRODUCT(INDIRECT("Allocation!R6C${checkboxCol}:R20C${checkboxCol}",FALSE)*Allocation!F6:F20)=0,0,` +
         `(Allocation!F${allocRow}*INDIRECT("Allocation!R${allocRow}C${checkboxCol}",FALSE))/` +
-        `SUMPRODUCT(INDIRECT("Allocation!R6C${checkboxCol}:R20C${checkboxCol}",FALSE)*Allocation!F6:F20)*B17))`
+        `SUMPRODUCT(INDIRECT("Allocation!R6C${checkboxCol}:R20C${checkboxCol}",FALSE)*Allocation!F6:F20)*B18))`
       ).setNumberFormat('0%').setBackground('#F0F0F0');
       
-      // Points
       sheet.getRange(currentRow, 4).setFormula(
         `=IF(C${currentRow}="","",ROUND(C${currentRow}*$B$2,0))`
       ).setNumberFormat('0').setBackground('#E8F5E9');
@@ -291,40 +281,126 @@ function setupWorkstreamTab(sheet, workstreamName) {
   }
   
   // Summary Section
-  sheet.getRange('A36').setValue('WORKSTREAM %:').setFontWeight('bold');
-  sheet.getRange('B36').setFormula('=SUMIF(C6:C15,">0")')
+  sheet.getRange('A37').setValue('WORKSTREAM %:').setFontWeight('bold');
+  sheet.getRange('B37').setFormula('=SUMIF(C7:C16,">0")')
     .setNumberFormat('0%')
     .setFontWeight('bold');
   
-  sheet.getRange('C36').setValue('PMM %:').setFontWeight('bold');
-  sheet.getRange('D36').setFormula('=SUMIF(C20:C34,">0")')
+  sheet.getRange('C37').setValue('PMM %:').setFontWeight('bold');
+  sheet.getRange('D37').setFormula('=SUMIF(C21:C35,">0")')
     .setNumberFormat('0%')
     .setFontWeight('bold');
   
-  sheet.getRange('A37').setValue('TOTAL POINTS:').setFontWeight('bold');
-  sheet.getRange('B37').setFormula('=SUM(D6:D15,D20:D34)')
+  sheet.getRange('A38').setValue('TOTAL POINTS:').setFontWeight('bold');
+  sheet.getRange('B38').setFormula('=SUM(D7:D16,D21:D35)')
     .setNumberFormat('0')
     .setFontWeight('bold');
   
-  sheet.getRange('C37').setValue('STATUS:').setFontWeight('bold');
-  sheet.getRange('D37').setFormula(
-    '=IF(B37=B2,"✅ Allocated",' +
-    'IF(B36>1,"⚠️ Over 100%",' +
-    '"📊 " & TEXT(B37/B2,"0%")))'
-  ).setFontColor('#006600');
+  // Add borders to priorities section
+  sheet.getRange(5, 1, 12, 4).setBorder(true, true, true, true, true, true);
+  sheet.getRange(18, 1, 1, 4).setBorder(true, true, true, true, false, false);
+  sheet.getRange(20, 1, 16, 4).setBorder(true, true, true, true, true, true);
+  sheet.getRange(37, 1, 2, 4).setBorder(true, true, true, true, false, false);
   
-  // Add borders
-  sheet.getRange(4, 1, 12, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(17, 1, 1, 4).setBorder(true, true, true, true, false, false);
-  sheet.getRange(19, 1, 16, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(36, 1, 2, 4).setBorder(true, true, true, true, false, false);
+  // ==================== ASSET PLANNING SECTION ====================
   
-  // Instructions
-  sheet.getRange('A39:D39').merge()
-    .setValue('📝 Enter team priorities with exact %. PMM priorities auto-scale to fill remaining capacity.')
+  // Asset Planning Header
+  sheet.getRange('A41:E41').merge()
+    .setValue('ASSET PLANNING')
+    .setFontSize(14)
+    .setFontWeight('bold')
+    .setBackground('#FF9800')
+    .setFontColor('#FFFFFF');
+  
+  // Budget info row - RIGHT BELOW HEADER
+  sheet.getRange('A42').setValue('Budget:');
+  sheet.getRange('B42').setFormula('=B2')
+    .setFontWeight('bold')
+    .setNumberFormat('0')
+    .setBackground('#E8F5E9');
+  sheet.getRange('C42').setValue('Spent:');
+  sheet.getRange('D42').setFormula('=SUMIF(D46:D95,">0")')
+    .setFontWeight('bold')
+    .setNumberFormat('0')
+    .setBackground('#FFE0B2');
+  sheet.getRange('E42').setFormula(
+    '=IF(B42-D42<0,"⚠️ OVER by "&ABS(B42-D42),"💰 "&(B42-D42)&" remaining")'
+  ).setFontWeight('bold');
+  
+  // T-shirt size legend
+  sheet.getRange('A43:E43').merge()
+    .setValue('T-Shirt Sizes: XS=1 point | S=3 points | M=5 points | L=13 points | XL=21 points')
     .setFontSize(10)
-    .setFontColor('#666666')
-    .setBackground('#FFFEF7');
+    .setFontStyle('italic')
+    .setBackground('#FFF3E0');
+  
+  // Asset table headers - Set individually to avoid issues
+  sheet.getRange('A45').setValue('Asset Description')
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2');
+  sheet.getRange('B45').setValue('Go Live Date')
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2');
+  sheet.getRange('C45').setValue('T-Shirt Size')
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2');
+  sheet.getRange('D45').setValue('Cost')
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2');
+  sheet.getRange('E45').setValue('Status')
+    .setFontWeight('bold')
+    .setBackground('#FFE0B2');
+  
+  // Add 50 rows for assets
+  for (let i = 0; i < 50; i++) {
+    const row = 46 + i;
+    
+    // Asset Description
+    sheet.getRange(row, 1).setBackground('#FFFFFF');
+    
+    // Go Live Date
+    sheet.getRange(row, 2).setBackground('#FFF9C4')
+      .setNumberFormat('mm/dd/yyyy');
+    
+    // T-Shirt Size dropdown
+    const sizeValidation = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['XS', 'S', 'M', 'L', 'XL'], true)
+      .setAllowInvalid(false)
+      .build();
+    sheet.getRange(row, 3).setDataValidation(sizeValidation)
+      .setBackground('#E1F5FE');
+    
+    // Cost (Points) with formula
+    sheet.getRange(row, 4).setFormula(
+      `=IF(C${row}="","",SWITCH(C${row},"XS",1,"S",3,"M",5,"L",13,"XL",21,0))`
+    ).setNumberFormat('0')
+     .setBackground('#F0F0F0');
+    
+    // Status dropdown
+    const statusValidation = SpreadsheetApp.newDataValidation()
+      .requireValueInList(['Planning', 'In Progress', 'Review', 'Complete'], true)
+      .setAllowInvalid(false)
+      .build();
+    sheet.getRange(row, 5).setDataValidation(statusValidation)
+      .setBackground('#E8F5E9');
+  }
+  
+  // Add borders to asset table
+  sheet.getRange(45, 1, 51, 5).setBorder(true, true, true, true, true, true);
+}
+
+// ==================== HELPER FUNCTION ====================
+
+function findCheckboxColumn(workstreamName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const allocSheet = ss.getSheetByName('Allocation');
+  
+  for (let col = 7; col <= 20; col++) {
+    if (allocSheet.getRange(5, col).getValue() === workstreamName) {
+      return col;
+    }
+  }
+  return -1;
 }
 
 // ==================== WORKSTREAM MANAGEMENT ====================
@@ -380,7 +456,7 @@ function addWorkstream() {
   allocSheet.getRange(newTotalRow, 3).setFormula(`=SUM(C9:C${totalRow})`);
   
   // Find next available column for checkboxes
-  let nextCol = 7; // Start from column G
+  let nextCol = 7;
   while (allocSheet.getRange(5, nextCol).getValue() && nextCol < 20) {
     nextCol++;
   }
@@ -396,11 +472,11 @@ function addWorkstream() {
     allocSheet.getRange(row, nextCol).insertCheckboxes();
   }
   
-  // Create the workstream tab
+  // Create the workstream tab with asset planning
   const wsSheet = ss.insertSheet(workstreamName);
-  setupWorkstreamTab(wsSheet, workstreamName);
+  setupWorkstreamTabWithAssets(wsSheet, workstreamName);
   
-  ui.alert('Success', `"${workstreamName}" added.\nAllocate points in the Allocation tab.`, ui.ButtonSet.OK);
+  ui.alert('Success', `"${workstreamName}" added with asset planning.\nAllocate points in the Allocation tab.`, ui.ButtonSet.OK);
 }
 
 function removeWorkstream() {
@@ -423,7 +499,6 @@ function removeWorkstream() {
     return;
   }
   
-  // Simple prompt for workstream name
   const response = ui.prompt(
     'Remove Workstream',
     'Enter the name of the workstream to remove:\n\nAvailable: ' + workstreams.join(', '),
@@ -473,55 +548,6 @@ function removeWorkstream() {
   ui.alert('Success', `"${workstreamName}" removed.`, ui.ButtonSet.OK);
 }
 
-// ==================== REFRESH FUNCTION ====================
-
-function refreshWorkstreamFormulas() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  // Get all workstreams from allocation table
-  const workstreams = [];
-  let row = 9;
-  let wsName = allocSheet.getRange(row, 1).getValue();
-  while (wsName && wsName !== 'TOTAL' && row < 20) {
-    workstreams.push(wsName);
-    row++;
-    wsName = allocSheet.getRange(row, 1).getValue();
-  }
-  
-  // Refresh each workstream's formulas
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (wsSheet) {
-      // Find the checkbox column for this workstream
-      const checkboxCol = findCheckboxColumn(wsName);
-      
-      if (checkboxCol > 0) {
-        // Update PMM priority formulas
-        for (let i = 0; i < 15; i++) {
-          const currentRow = 20 + i;
-          const allocRow = 6 + i;
-          
-          // Update priority name formula
-          wsSheet.getRange(currentRow, 1).setFormula(
-            `=IF(INDIRECT("Allocation!R${allocRow}C${checkboxCol}",FALSE)=TRUE,Allocation!E${allocRow},"")`
-          );
-          
-          // Update weight formula
-          wsSheet.getRange(currentRow, 3).setFormula(
-            `=IF(A${currentRow}="","",` +
-            `IF(SUMPRODUCT(INDIRECT("Allocation!R6C${checkboxCol}:R20C${checkboxCol}",FALSE)*Allocation!F6:F20)=0,0,` +
-            `(Allocation!F${allocRow}*INDIRECT("Allocation!R${allocRow}C${checkboxCol}",FALSE))/` +
-            `SUMPRODUCT(INDIRECT("Allocation!R6C${checkboxCol}:R20C${checkboxCol}",FALSE)*Allocation!F6:F20)*B17))`
-          );
-        }
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Formulas refreshed successfully!');
-}
-
 // ==================== MENU SETUP ====================
 
 function onOpen() {
@@ -531,6 +557,5 @@ function onOpen() {
     .addSeparator()
     .addItem('➕ Add Workstream', 'addWorkstream')
     .addItem('➖ Remove Workstream', 'removeWorkstream')
-    .addItem('🔄 Refresh Formulas', 'refreshWorkstreamFormulas')
     .addToUi();
 }
