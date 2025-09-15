@@ -1,6 +1,7 @@
 /**
- * Marketing Team Points System - Version 7.0 Optimized
- * Cleaned up and more efficient version with bug fixes
+ * Marketing Team Points System - Version 8.1
+ * Bug fixes: Date formatting, Origin selection, Team-initiated work in manifest
+ * New features: Sort manifest by date or workstream
  */
 
 // ==================== CONSTANTS ====================
@@ -291,17 +292,30 @@ function setupAssetSection(sheet, workstreamName) {
     .setAllowInvalid(false)
     .build();
   
+  // Origin validation for Workstream or PMM
+  const originValidation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Workstream', 'PMM'], true)
+    .setAllowInvalid(false)
+    .build();
+  
   const teamValidation = teamNames.length > 0 ? 
     SpreadsheetApp.newDataValidation()
       .requireValueInList(teamNames, true)
       .setAllowInvalid(false)
       .build() : null;
   
+  // Get current year for default dates
+  const currentYear = new Date().getFullYear();
+  const defaultDate = new Date(currentYear, 0, 1); // January 1st of current year
+  
   for (let i = 0; i < 50; i++) {
     const row = 46 + i;
     
     setCell(sheet, `A${row}`, '', { background: '#FFFFFF' });
-    setCell(sheet, `B${row}`, '', { background: '#FFF9C4', format: 'yyyy-mm-dd' });
+    
+    // Set default date to current year
+    setCell(sheet, `B${row}`, '', { background: '#FFF9C4' });
+    sheet.getRange(row, 2).setNumberFormat('yyyy-MM-dd');
     
     sheet.getRange(row, 3).setDataValidation(sizeValidation)
       .setBackground('#E1F5FE');
@@ -313,7 +327,10 @@ function setupAssetSection(sheet, workstreamName) {
         .join(',') + ',0))';
     setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
     
-    setCell(sheet, `E${row}`, 'Workstream', { background: CONFIG.COLORS.LIGHT_GREEN });
+    // Origin dropdown (Workstream or PMM)
+    sheet.getRange(row, 5).setDataValidation(originValidation)
+      .setBackground(CONFIG.COLORS.LIGHT_GREEN);
+    setCell(sheet, `E${row}`, 'Workstream'); // Default to Workstream
     
     if (teamValidation) {
       sheet.getRange(row, 6).setDataValidation(teamValidation)
@@ -459,6 +476,8 @@ function setupTeamTab(sheet, teamName) {
     .setAllowInvalid(false)
     .build();
   
+  const currentYear = new Date().getFullYear();
+  
   for (let i = 0; i < 30; i++) {
     const row = 51 + i;
     
@@ -474,7 +493,8 @@ function setupTeamTab(sheet, teamName) {
         .join(',') + ',0))';
     setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
     
-    setCell(sheet, `E${row}`, '', { background: '#FFF9C4', format: 'yyyy-mm-dd' });
+    setCell(sheet, `E${row}`, '', { background: '#FFF9C4' });
+    sheet.getRange(row, 5).setNumberFormat('yyyy-MM-dd');
     setCell(sheet, `F${row}`, 'Team', { background: '#E1F5FE' });
   }
   
@@ -485,7 +505,7 @@ function setupTeamTab(sheet, teamName) {
 }
 
 // ==================== TEAM ASSIGNMENTS ====================
-function refreshTeamAssignments() {
+function refreshTeamAssignments(sortBy = 'date') {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const teams = getTeamNames();
   
@@ -500,6 +520,7 @@ function refreshTeamAssignments() {
     teamAssignments[team] = [];
     const teamSheet = ss.getSheetByName(team + ' Team');
     if (teamSheet) {
+      // Clear workstream assignments area only (rows 12-49)
       teamSheet.getRange(12, 1, 38, 6).clear();
     }
   });
@@ -515,13 +536,46 @@ function refreshTeamAssignments() {
       const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
       
       if (description && teamAssignment && teams.includes(teamAssignment)) {
+        // Format date properly
+        let formattedDate = goLiveDate;
+        if (goLiveDate instanceof Date) {
+          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        }
+        
         teamAssignments[teamAssignment].push({
           origin: wsName,
           description,
           size: tShirtSize,
           points,
-          goLiveDate,
+          goLiveDate: formattedDate,
           source: origin
+        });
+      }
+    });
+  });
+  
+  // Collect team-initiated work
+  teams.forEach(teamName => {
+    const teamSheet = ss.getSheetByName(teamName + ' Team');
+    if (!teamSheet) return;
+    
+    const teamData = teamSheet.getRange(51, 1, 30, 6).getValues();
+    teamData.forEach(row => {
+      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
+      
+      if (description && points > 0) {
+        let formattedDate = goLiveDate;
+        if (goLiveDate instanceof Date) {
+          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        }
+        
+        teamAssignments[teamName].push({
+          origin: teamName,
+          description,
+          size: tShirtSize,
+          points,
+          goLiveDate: formattedDate,
+          source: 'Team'
         });
       }
     });
@@ -534,48 +588,91 @@ function refreshTeamAssignments() {
     
     const assignments = teamAssignments[teamName];
     if (assignments.length === 0) {
-      setCell(teamSheet, 'A12', 'No workstream assignments', {
+      setCell(teamSheet, 'A12', 'No assignments', {
         fontStyle: true, fontColor: '#666666'
       });
       return;
     }
     
-    // Group by workstream
-    const grouped = {};
-    assignments.forEach(a => {
-      if (!grouped[a.origin]) grouped[a.origin] = [];
-      grouped[a.origin].push(a);
-    });
-    
-    let currentRow = 12;
-    Object.keys(grouped).sort().forEach(wsName => {
-      if (currentRow >= 50) return;
-      
-      // Workstream header
-      setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
-        merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
+    // Sort based on preference
+    if (sortBy === 'date') {
+      // Sort by go live date (earliest first), then by workstream
+      assignments.sort((a, b) => {
+        if (a.goLiveDate && b.goLiveDate) {
+          const dateCompare = a.goLiveDate.localeCompare(b.goLiveDate);
+          if (dateCompare !== 0) return dateCompare;
+        } else if (a.goLiveDate) {
+          return -1; // Items with dates come first
+        } else if (b.goLiveDate) {
+          return 1;
+        }
+        return a.origin.localeCompare(b.origin);
       });
-      currentRow++;
+    } else {
+      // Default: Group by workstream
+      const grouped = {};
+      assignments.forEach(a => {
+        if (!grouped[a.origin]) grouped[a.origin] = [];
+        grouped[a.origin].push(a);
+      });
       
-      // Assignments
-      grouped[wsName].forEach(a => {
+      let currentRow = 12;
+      Object.keys(grouped).sort().forEach(wsName => {
         if (currentRow >= 50) return;
         
-        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-          wsName,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]]);
-        
-        if (a.goLiveDate) {
-          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-mm-dd');
-        }
-        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
+        // Workstream header
+        setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
+          merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
+        });
         currentRow++;
+        
+        // Assignments
+        grouped[wsName].forEach(a => {
+          if (currentRow >= 50) return;
+          
+          teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
+            a.origin,
+            a.description,
+            a.size,
+            a.points,
+            a.goLiveDate || '',
+            a.source
+          ]]);
+          
+          if (a.goLiveDate) {
+            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
+          }
+          teamSheet.getRange(currentRow, 4).setNumberFormat('0');
+          currentRow++;
+        });
       });
+      
+      if (currentRow > 12) {
+        teamSheet.getRange(12, 1, currentRow - 12, 6)
+          .setBorder(true, true, true, true, true, false);
+      }
+      return; // Exit here for workstream grouping
+    }
+    
+    // Write all assignments sorted by date
+    let currentRow = 12;
+    assignments.forEach(a => {
+      if (currentRow >= 50) return;
+      
+      teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
+        a.origin,
+        a.description,
+        a.size,
+        a.points,
+        a.goLiveDate || '',
+        a.source
+      ]]);
+      
+      if (a.goLiveDate) {
+        teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
+      }
+      teamSheet.getRange(currentRow, 4).setNumberFormat('0');
+      currentRow++;
     });
     
     if (currentRow > 12) {
@@ -585,6 +682,16 @@ function refreshTeamAssignments() {
   });
   
   SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
+}
+
+// Sort manifest by date
+function sortManifestByDate() {
+  refreshTeamAssignments('date');
+}
+
+// Sort manifest by workstream
+function sortManifestByWorkstream() {
+  refreshTeamAssignments('workstream');
 }
 
 // ==================== WORKSTREAM MANAGEMENT ====================
@@ -877,6 +984,8 @@ function onOpen() {
       .addItem('➕ Add Team', 'addTeam')
       .addItem('➖ Remove Team', 'removeTeam')
       .addSeparator()
-      .addItem('🔄 Refresh Team Assignments', 'refreshTeamAssignments'))
+      .addItem('🔄 Refresh Team Assignments', 'refreshTeamAssignments')
+      .addItem('📅 Sort Manifest by Date', 'sortManifestByDate')
+      .addItem('📊 Sort Manifest by Workstream', 'sortManifestByWorkstream'))
     .addToUi();
 }
