@@ -1,7 +1,6 @@
 /**
- * Marketing Team Points System - Version 8.1
- * Bug fixes: Date formatting, Origin selection, Team-initiated work in manifest
- * New features: Sort manifest by date or workstream
+ * Marketing Team Points System - Version 9.0
+ * Added Creative Planning provisions for teams
  */
 
 // ==================== CONSTANTS ====================
@@ -56,11 +55,14 @@ function setupPointsSystem() {
   const teamSheet = ss.insertSheet('Creative Team');
   setupTeamTab(teamSheet, 'Creative');
   
+  // Update team dropdowns after creating the default team
+  updateTeamDropdowns();
+  
   ss.setActiveSheet(allocationSheet);
   
   SpreadsheetApp.getUi().alert(
     'Points System Setup Complete! 🎉',
-    'System ready with asset planning and team assignments.',
+    'System ready with asset planning, team assignments, and creative planning.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -398,7 +400,7 @@ function setupTeamTab(sheet, teamName) {
   });
   
   // Capacity Section
-  setCell(sheet, 'A3:F3', 'TEAM CAPACITY', {
+  setCell(sheet, 'A3:F3', 'TEAM CAPACITY & PLANNING', {
     merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
   });
   
@@ -406,7 +408,8 @@ function setupTeamTab(sheet, teamName) {
   const capacityData = [
     ['A4', 'Team Members:', 'B4', 5],
     ['C4', 'Working Days/Month:', 'D4', 20],
-    ['A5', 'Total Days Off (All Members):', 'B5', 0]
+    ['A5', 'Total Days Off (All Members):', 'B5', 0],
+    ['A6', 'Creative Planning Days:', 'B6', 0]  // NEW: Creative Planning
   ];
   
   capacityData.forEach(([labelCell, label, valueCell, value]) => {
@@ -416,60 +419,82 @@ function setupTeamTab(sheet, teamName) {
     });
   });
   
-  setCell(sheet, 'C5', 'Team Capacity:');
+  setCell(sheet, 'C5', 'Gross Capacity:');
   setCell(sheet, 'D5', '=(B4*D4)-B5', {
+    fontWeight: true, background: '#E8F5E9', format: '0'
+  });
+  
+  setCell(sheet, 'C6', 'Net Capacity:');
+  setCell(sheet, 'D6', '=D5-B6', {
     fontWeight: true, background: CONFIG.COLORS.LIGHT_GREEN, format: '0'
   });
   
   // Assignment Summary
-  setCell(sheet, 'A7:F7', 'ASSIGNMENT SUMMARY', {
+  setCell(sheet, 'A8:F8', 'ASSIGNMENT SUMMARY', {
     merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
   });
   
-  setCell(sheet, 'A8', 'Workstream Assigned:');
-  setCell(sheet, 'B8', '=SUMIF(F12:F200,"<>Team",D12:D200)', {
+  setCell(sheet, 'A9', 'Workstream Assigned:');
+  setCell(sheet, 'B9', '=SUMIF(F13:F200,"Workstream",D13:D200)', {
     fontWeight: true, fontSize: 14, background: CONFIG.COLORS.LIGHT_ORANGE, format: '0'
   });
   
-  setCell(sheet, 'C8', 'Team Initiated:');
-  setCell(sheet, 'D8', '=SUMIF(F12:F200,"Team",D12:D200)', {
+  setCell(sheet, 'C9', 'Team Initiated:');
+  setCell(sheet, 'D9', '=SUMIF(F13:F200,"Team",D13:D200)', {
     fontWeight: true, fontSize: 14, background: '#E1F5FE', format: '0'
   });
   
-  setCell(sheet, 'E8', 'Total:');
-  setCell(sheet, 'F8', '=B8+D8', {
+  setCell(sheet, 'E9', 'Creative Planning:');
+  setCell(sheet, 'F9', '=B6', {
+    fontWeight: true, fontSize: 14, background: '#FFECB3', format: '0'
+  });
+  
+  setCell(sheet, 'A10', 'Total Allocated:');
+  setCell(sheet, 'B10', '=B9+D9+F9', {
     fontWeight: true, fontSize: 14, background: '#FFD54F', format: '0'
   });
   
   // Utilization
-  setCell(sheet, 'A9', 'Utilization:');
-  setCell(sheet, 'B9', '=IF(D5=0,"",F8/D5)', {
+  setCell(sheet, 'C10', 'Utilization:');
+  setCell(sheet, 'D10', '=IF(D6=0,"",B10/D6)', {
     fontWeight: true, fontSize: 14, format: '0%'
   });
   
-  setCell(sheet, 'C9:F9', 
-    '=IF(F8>D5,"⚠️ OVER CAPACITY by "&(F8-D5)&" points",IF(F8=D5,"✅ FULL","✅ "&(D5-F8)&" points available"))', {
+  setCell(sheet, 'E10:F10', 
+    '=IF(B10>D6,"⚠️ OVER by "&(B10-D6)&" pts",IF(B10=D6,"✅ FULL","✅ "&(D6-B10)&" pts available"))', {
     merge: true, fontWeight: true
   });
   
   // Conditional formatting for over capacity
   const rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$F$8>$D$5')
+    .whenFormulaSatisfied('=$B$10>$D$6')
     .setFontColor('#FF0000')
-    .setRanges([sheet.getRange('F8')])
+    .setRanges([sheet.getRange('B10')])
     .build();
   sheet.setConditionalFormatRules([rule]);
   
   // Table headers
-  sheet.getRange('A11:F11').setValues([['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source']])
+  sheet.getRange('A12:F12').setValues([['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source']])
     .setFontWeight(true).setBackground('#E1BEE7');
   
-  setCell(sheet, 'A12', 'Click "Refresh Team Assignments" to load...', {
+  // Creative Planning Entry (auto-generated)
+  setCell(sheet, 'A13', teamName, { background: '#FFECB3' });
+  setCell(sheet, 'B13', 'Creative Planning & Ideation', { 
+    background: '#FFECB3', fontStyle: true 
+  });
+  setCell(sheet, 'C13', '-', { background: '#FFECB3' });
+  setCell(sheet, 'D13', '=B6', { 
+    format: '0', background: '#FFECB3', fontWeight: true 
+  });
+  setCell(sheet, 'E13', 'Ongoing', { background: '#FFECB3' });
+  setCell(sheet, 'F13', 'Team', { background: '#FFECB3' });
+  
+  setCell(sheet, 'A14', 'Click "Refresh Team Assignments" to load workstream assignments...', {
     fontStyle: true, fontColor: '#666666'
   });
   
   // Team-initiated section
-  setCell(sheet, 'A50:F50', '--- TEAM-INITIATED WORK ---', {
+  setCell(sheet, 'A60:F60', '--- TEAM-INITIATED WORK ---', {
     merge: true, fontWeight: true, fontStyle: true, background: '#E1F5FE'
   });
   
@@ -485,7 +510,7 @@ function setupTeamTab(sheet, teamName) {
   const currentDay = today.getDate();
   
   for (let i = 0; i < 30; i++) {
-    const row = 51 + i;
+    const row = 61 + i;
     
     setCell(sheet, `A${row}`, teamName, { background: CONFIG.COLORS.GRAY });
     setCell(sheet, `B${row}`, '', { background: CONFIG.COLORS.LIGHT_YELLOW });
@@ -507,13 +532,13 @@ function setupTeamTab(sheet, teamName) {
   }
   
   // Borders
-  sheet.getRange(3, 1, 3, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(7, 1, 3, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(50, 1, 31, 6).setBorder(true, true, true, true, true, true);
+  sheet.getRange(3, 1, 4, 6).setBorder(true, true, true, true, true, true);
+  sheet.getRange(8, 1, 3, 6).setBorder(true, true, true, true, true, true);
+  sheet.getRange(60, 1, 31, 6).setBorder(true, true, true, true, true, true);
 }
 
 // ==================== TEAM ASSIGNMENTS ====================
-function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstream grouping
+function refreshTeamAssignments(sortBy = 'workstream') {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const teams = getTeamNames();
   
@@ -528,8 +553,8 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
     teamAssignments[team] = [];
     const teamSheet = ss.getSheetByName(team + ' Team');
     if (teamSheet) {
-      // Clear workstream assignments area only (rows 12-49)
-      teamSheet.getRange(12, 1, 38, 6).clear();
+      // Clear workstream assignments area only (rows 14-59)
+      teamSheet.getRange(14, 1, 46, 6).clear();
     }
   });
   
@@ -556,18 +581,18 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
           size: tShirtSize,
           points,
           goLiveDate: formattedDate,
-          source: origin
+          source: 'Workstream'  // Always Workstream for assets from workstream tabs
         });
       }
     });
   });
   
-  // Collect team-initiated work
+  // Collect team-initiated work (but not creative planning, that's automatic)
   teams.forEach(teamName => {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    const teamData = teamSheet.getRange(51, 1, 30, 6).getValues();
+    const teamData = teamSheet.getRange(61, 1, 30, 6).getValues();
     teamData.forEach(row => {
       const [origin, description, tShirtSize, points, goLiveDate, source] = row;
       
@@ -596,7 +621,7 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
     
     const assignments = teamAssignments[teamName];
     if (assignments.length === 0) {
-      setCell(teamSheet, 'A12', 'No assignments', {
+      setCell(teamSheet, 'A14', 'No workstream assignments', {
         fontStyle: true, fontColor: '#666666'
       });
       return;
@@ -620,6 +645,32 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
         }
         return a.origin.localeCompare(b.origin);
       });
+      
+      // Write all assignments sorted by date
+      let currentRow = 14;
+      assignments.forEach(a => {
+        if (currentRow >= 60) return;
+        
+        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
+          a.origin,
+          a.description,
+          a.size,
+          a.points,
+          a.goLiveDate || '',
+          a.source
+        ]]);
+        
+        if (a.goLiveDate) {
+          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
+        }
+        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
+        currentRow++;
+      });
+      
+      if (currentRow > 14) {
+        teamSheet.getRange(14, 1, currentRow - 14, 6)
+          .setBorder(true, true, true, true, true, false);
+      }
     } else {
       // Default: Group by workstream
       const grouped = {};
@@ -628,9 +679,9 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
         grouped[a.origin].push(a);
       });
       
-      let currentRow = 12;
+      let currentRow = 14;
       Object.keys(grouped).sort().forEach(wsName => {
-        if (currentRow >= 50) return;
+        if (currentRow >= 60) return;
         
         // Workstream header
         setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
@@ -640,7 +691,7 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
         
         // Assignments
         grouped[wsName].forEach(a => {
-          if (currentRow >= 50) return;
+          if (currentRow >= 60) return;
           
           teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
             a.origin,
@@ -659,37 +710,10 @@ function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstre
         });
       });
       
-      if (currentRow > 12) {
-        teamSheet.getRange(12, 1, currentRow - 12, 6)
+      if (currentRow > 14) {
+        teamSheet.getRange(14, 1, currentRow - 14, 6)
           .setBorder(true, true, true, true, true, false);
       }
-      return; // Exit here for workstream grouping
-    }
-    
-    // Write all assignments sorted by date
-    let currentRow = 12;
-    assignments.forEach(a => {
-      if (currentRow >= 50) return;
-      
-      teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-        a.origin,
-        a.description,
-        a.size,
-        a.points,
-        a.goLiveDate || '',
-        a.source
-      ]]);
-      
-      if (a.goLiveDate) {
-        teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-      }
-      teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-      currentRow++;
-    });
-    
-    if (currentRow > 12) {
-      teamSheet.getRange(12, 1, currentRow - 12, 6)
-        .setBorder(true, true, true, true, true, false);
     }
   });
   
