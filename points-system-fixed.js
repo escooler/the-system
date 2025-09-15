@@ -304,17 +304,20 @@ function setupAssetSection(sheet, workstreamName) {
       .setAllowInvalid(false)
       .build() : null;
   
-  // Get current year for default dates
-  const currentYear = new Date().getFullYear();
-  const defaultDate = new Date(currentYear, 0, 1); // January 1st of current year
+  // Get current date for defaults
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth();
+  const currentDay = today.getDate();
   
   for (let i = 0; i < 50; i++) {
     const row = 46 + i;
     
     setCell(sheet, `A${row}`, '', { background: '#FFFFFF' });
     
-    // Set default date to current year
-    setCell(sheet, `B${row}`, '', { background: '#FFF9C4' });
+    // Set default date to current date
+    const defaultDate = new Date(currentYear, currentMonth, currentDay);
+    setCell(sheet, `B${row}`, defaultDate, { background: '#FFF9C4' });
     sheet.getRange(row, 2).setNumberFormat('yyyy-MM-dd');
     
     sheet.getRange(row, 3).setDataValidation(sizeValidation)
@@ -476,7 +479,10 @@ function setupTeamTab(sheet, teamName) {
     .setAllowInvalid(false)
     .build();
   
-  const currentYear = new Date().getFullYear();
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth();
+  const currentDay = today.getDate();
   
   for (let i = 0; i < 30; i++) {
     const row = 51 + i;
@@ -493,7 +499,9 @@ function setupTeamTab(sheet, teamName) {
         .join(',') + ',0))';
     setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
     
-    setCell(sheet, `E${row}`, '', { background: '#FFF9C4' });
+    // Set default date to current date
+    const defaultDate = new Date(currentYear, currentMonth, currentDay);
+    setCell(sheet, `E${row}`, defaultDate, { background: '#FFF9C4' });
     sheet.getRange(row, 5).setNumberFormat('yyyy-MM-dd');
     setCell(sheet, `F${row}`, 'Team', { background: '#E1F5FE' });
   }
@@ -505,7 +513,7 @@ function setupTeamTab(sheet, teamName) {
 }
 
 // ==================== TEAM ASSIGNMENTS ====================
-function refreshTeamAssignments(sortBy = 'date') {
+function refreshTeamAssignments(sortBy = 'workstream') {  // Default to workstream grouping
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const teams = getTeamNames();
   
@@ -598,12 +606,16 @@ function refreshTeamAssignments(sortBy = 'date') {
     if (sortBy === 'date') {
       // Sort by go live date (earliest first), then by workstream
       assignments.sort((a, b) => {
-        if (a.goLiveDate && b.goLiveDate) {
-          const dateCompare = a.goLiveDate.localeCompare(b.goLiveDate);
+        // Convert dates to strings for comparison
+        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
+        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
+        
+        if (dateA && dateB) {
+          const dateCompare = dateA.localeCompare(dateB);
           if (dateCompare !== 0) return dateCompare;
-        } else if (a.goLiveDate) {
+        } else if (dateA) {
           return -1; // Items with dates come first
-        } else if (b.goLiveDate) {
+        } else if (dateB) {
           return 1;
         }
         return a.origin.localeCompare(b.origin);
