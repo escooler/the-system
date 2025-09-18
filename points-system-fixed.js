@@ -343,8 +343,7 @@ function setupTeamTab(sheet, teamName) {
   const capacityData = [
     ['A4', 'Team Members:', 'B4', 5],
     ['C4', 'Working Days/Month:', 'D4', 20],
-    ['A5', 'Total Days Off (All Members):', 'B5', 0],
-    ['A6', 'Creative Planning Days:', 'B6', 0]
+    ['A5', 'Total Days Off (All Members):', 'B5', 0]
   ];
   
   capacityData.forEach(([labelCell, label, valueCell, value]) => {
@@ -352,6 +351,12 @@ function setupTeamTab(sheet, teamName) {
     setCell(sheet, valueCell, value, {
       background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
     });
+  });
+  
+  // Creative Planning with next month reference
+  setCell(sheet, 'A6', `=CONCATENATE("Creative Planning Days (for ",IF(Allocation!C3="December","January",INDEX({"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November"},0)+1)),"):")`);
+  setCell(sheet, 'B6', 0, {
+    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
   });
   
   setCell(sheet, 'C5', 'Gross Capacity:');
@@ -379,7 +384,8 @@ function setupTeamTab(sheet, teamName) {
     fontWeight: true, fontSize: 14, background: '#E1F5FE', format: '0'
   });
   
-  setCell(sheet, 'E9', 'Creative Planning:');
+  // Creative Planning with dynamic month label
+  setCell(sheet, 'E9', `=CONCATENATE("Creative Planning (",IF(Allocation!C3="December","Jan",TEXT(DATE(2000,MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},0)+1,1),"mmm")),"):")`);
   setCell(sheet, 'F9', '=B6', {
     fontWeight: true, fontSize: 14, background: '#FFECB3', format: '0'
   });
@@ -486,16 +492,24 @@ function refreshTeamAssignments(sortBy = 'workstream') {
     if (teamSheet) {
       const creativePlanningDays = teamSheet.getRange('B6').getValue();
       if (creativePlanningDays > 0) {
-        // Get first day of selected month for Creative Planning date
+        // Get first day of NEXT month for Creative Planning date
         const allocSheet = ss.getSheetByName('Allocation');
         const monthName = allocSheet.getRange('C3').getValue();
         const year = allocSheet.getRange('E3').getValue();
         const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        const planningDate = new Date(year, monthIndex, 1);
+        
+        // Calculate next month
+        let nextMonthIndex = (monthIndex + 1) % 12;
+        let nextYear = year;
+        if (nextMonthIndex === 0) {
+          nextYear = year + 1;  // If December, next month is January of next year
+        }
+        const planningDate = new Date(nextYear, nextMonthIndex, 1);
+        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
         
         teamAssignments[teamName].push({
           origin: teamName,
-          description: 'Creative Planning & Ideation',
+          description: `Creative Planning & Ideation (for ${nextMonthName})`,
           size: '-',
           points: creativePlanningDays,
           goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
