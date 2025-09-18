@@ -175,17 +175,19 @@ function setupAllocationTab(sheet) {
     setCell(sheet, `F${row}`, p[1], {
       format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
     });
-    // Add checkboxes
+    // Add checkboxes for workstream columns only
     for (let col = 7; col <= 10; col++) {
       sheet.getRange(row, col).insertCheckboxes();
     }
   });
   
-  // Empty rows for more priorities
+  // Empty rows for more priorities - no checkboxes in weight column
   for (let row = 11; row <= 21; row++) {
+    setCell(sheet, `E${row}`, '');  // Empty priority name
     setCell(sheet, `F${row}`, '', {
       format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
     });
+    // Add checkboxes only for workstream columns (G through J)
     for (let col = 7; col <= 10; col++) {
       sheet.getRange(row, col).insertCheckboxes();
     }
