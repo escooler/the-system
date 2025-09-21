@@ -1,37 +1,10 @@
-function addTeamInitiatives(ss) {
-  const currentDate = new Date();
-  
-  Object.keys(TEST_DATA.TEAM_INITIATIVES).forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    // Clear existing initiatives
-    teamSheet.getRange('B62:E91').clearContent();
-    
-    // Add new initiatives
-    TEST_DATA.TEAM_INITIATIVES[teamName].forEach((initiative, index) => {
-      const row = 62 + index;
-      
-      // Calculate go-live date
-      const goLiveDate = new Date(currentDate);
-      goLiveDate.setDate(goLiveDate.getDate() + initiative.goLiveDays);
-      
-      teamSheet.getRange(`B${row}`).setValue(initiative.desc);
-      teamSheet.getRange(`C${row}`).setValue(initiative.size);
-      teamSheet.getRange(`E${row}`).setValue(goLiveDate);
-    });
-  });
-}/**
- * Streamlined Test Data Script for Points System v12.2
+/**
+ * Fixed Test Data Script for Points System v12.2
  * 
- * This standalone script adds a simple Test Data menu with two options:
- * - Populate with test data
- * - Clear all data
- * 
- * To install: 
- * 1. Add this as a new script file in your Apps Script project
- * 2. Run 'installTestDataMenu' once from the script editor
- * 3. Refresh your sheet to see the Test Data menu
+ * FIXED: Team initiatives now properly trigger point calculations
+ * - Ensures t-shirt size values are set correctly
+ * - Forces formula recalculation after data population
+ * - Matches the fix used for workstream assets
  */
 
 // ==================== TEST DATA CONFIGURATION ====================
@@ -39,7 +12,7 @@ const TEST_DATA = {
   // Three teams with realistic configurations
   TEAMS: [
     { name: 'Creative', members: 6, workingDays: 20, daysOff: 3, bufferPercent: 0.10, creativePlanning: 3 },
-    { name: 'Performance', members: 3, workingDays: 20, daysOff: 2, bufferPercent: 0.10, creativePlanning: 2 },
+    { name: 'Performance', members: 3, workingDays: 20, daysOff: 2, bufferPercent: 0.05, creativePlanning: 4 },
     { name: 'Content', members: 4, workingDays: 20, daysOff: 4, bufferPercent: 0.12, creativePlanning: 2 }
   ],
   
@@ -136,14 +109,12 @@ const TEST_DATA = {
     
     'ASO': [
       // Brand Focused Project
-      { desc: 'Brand App Store Graphics', size: 'M', origin: 'PMM', team: 'Performance', goLiveDays: 35 },
+      { desc: 'Brand App Store Graphics', size: 'S', origin: 'PMM', team: 'Performance', goLiveDays: 35 },
       { desc: 'Brand Messaging in App Desc', size: 'S', origin: 'PMM', team: 'Performance', goLiveDays: 30 },
       
       // Workstream optimization
       { desc: 'iOS Screenshots Optimization', size: 'S', origin: 'Workstream', team: 'Performance', goLiveDays: 20 },
       { desc: 'Android Store Listing Update', size: 'S', origin: 'Workstream', team: 'Performance', goLiveDays: 22 },
-      { desc: 'Keyword Research Report', size: 'S', origin: 'Workstream', team: 'Performance', goLiveDays: 10 },
-      { desc: 'Competitor Analysis Doc', size: 'S', origin: 'Workstream', team: 'Performance', goLiveDays: 8 },
       { desc: 'App Preview Videos (2x)', size: 'M', origin: 'Workstream', team: 'Performance', goLiveDays: 25 },
       { desc: 'Localization Updates', size: 'S', origin: 'Workstream', team: 'Performance', goLiveDays: 15 }
     ],
@@ -170,16 +141,18 @@ const TEST_DATA = {
   // Team-initiated work (to fill remaining capacity)
   TEAM_INITIATIVES: {
     'Creative': [
-      { desc: 'Design System Documentation', size: 'XS', goLiveDays: 20 },
-      
+      { desc: 'Design System Documentation', size: 'S', goLiveDays: 20 },
+      { desc: 'Brand Asset Library Update', size: 'M', goLiveDays: 25 },
+      { desc: 'Creative Process Optimization', size: 'XS', goLiveDays: 15 }
     ],
     'Performance': [
-      { desc: 'Q1 Analytics Audit', size: 'XS', goLiveDays: 25 },
-      { desc: 'Automation Tools Setup', size: 'M', goLiveDays: 18 },
+      { desc: 'Q1 Analytics Audit', size: 'S', goLiveDays: 25 },
+      
     ],
     'Content': [
-      { desc: 'Editorial Calendar System', size: 'XS', goLiveDays: 22 },
-      { desc: 'Content Style Guide Update', size: 'S', goLiveDays: 14 },
+      { desc: 'Editorial Calendar System', size: 'S', goLiveDays: 22 },
+      { desc: 'Content Style Guide Update', size: 'M', goLiveDays: 14 },
+      
     ]
   }
 };
@@ -457,6 +430,49 @@ function addWorkstreamAssets(ss) {
       wsSheet.getRange(`E${row}`).setValue(asset.origin);
       wsSheet.getRange(`F${row}`).setValue(asset.team);
     });
+  });
+}
+
+/**
+ * FIXED: Team initiatives now properly trigger point calculations
+ */
+function addTeamInitiatives(ss) {
+  const currentDate = new Date();
+  
+  Object.keys(TEST_DATA.TEAM_INITIATIVES).forEach(teamName => {
+    const teamSheet = ss.getSheetByName(teamName + ' Team');
+    if (!teamSheet) return;
+    
+    // Clear existing initiatives - only clear content, not formulas or validations
+    for (let row = 62; row <= 91; row++) {
+      teamSheet.getRange(`B${row}`).clearContent();  // Description
+      teamSheet.getRange(`C${row}`).clearContent();  // T-shirt size
+      // Don't clear A, D, E, F as they contain formulas/defaults
+    }
+    
+    // Add new initiatives
+    TEST_DATA.TEAM_INITIATIVES[teamName].forEach((initiative, index) => {
+      const row = 62 + index;
+      
+      // Calculate go-live date
+      const goLiveDate = new Date(currentDate);
+      goLiveDate.setDate(goLiveDate.getDate() + initiative.goLiveDays);
+      
+      // Set the values in the correct order to ensure formula calculation
+      teamSheet.getRange(`B${row}`).setValue(initiative.desc);
+      teamSheet.getRange(`C${row}`).setValue(initiative.size);
+      teamSheet.getRange(`E${row}`).setValue(goLiveDate);
+      
+      // Force recalculation by setting the formula again
+      // This ensures the t-shirt size gets converted to points
+      const currentFormula = teamSheet.getRange(`D${row}`).getFormula();
+      if (currentFormula) {
+        teamSheet.getRange(`D${row}`).setFormula(currentFormula);
+      }
+    });
+    
+    // Force a recalculation of the entire sheet
+    SpreadsheetApp.flush();
   });
 }
 
