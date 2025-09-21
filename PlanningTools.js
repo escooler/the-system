@@ -1,12 +1,13 @@
 /**
- * Planning Tools - Standalone Add-on for Points System v12
- * Completely decoupled planning enhancement
- * Version: 3.2 - Fixed Waterfall with Sequential Timeline & Complete Clearing
+ * Enhanced Planning Tools - Fixed Sprint Distribution & Team Work Preservation
+ * Version: 4.0 - Smart Sprint Distribution & Bug Fixes
  * 
- * INSTALLATION:
- * 1. Add this script to your Points System spreadsheet
- * 2. Run "installPlanningTools" function once
- * 3. Refresh the spreadsheet - both menus will appear
+ * FIXES:
+ * 1. Even distribution of points across sprints based on capacity
+ * 2. Smart sorting by go-live dates within sprint constraints
+ * 3. Configurable number of sprints
+ * 4. Team names in sprint headers
+ * 5. Preserves team-initiated work section when clearing
  */
 
 // ==================== CONSTANTS ====================
@@ -16,6 +17,7 @@ const PLANNING_CONFIG = {
   SPRINT_DURATIONS: ['1 week', '2 weeks', '1 month'],
   PLANNING_METHODS: ['Sprint', 'Waterfall'],
   SORT_OPTIONS: ['Sprint', 'Go-Live Date', 'Points'],
+  DEFAULT_FIRST_SPRINT: 1,
   COLORS: {
     HEADER: '#4285F4',
     CONFIG_BG: '#F5F5F5',
@@ -23,6 +25,8 @@ const PLANNING_CONFIG = {
     SPRINT_2: '#FFF9C4', 
     SPRINT_3: '#FFE0B2',
     SPRINT_4: '#F3E5F5',
+    SPRINT_5: '#E1F5FE',
+    SPRINT_6: '#FCE4EC',
     SPRINT_SEPARATOR: '#E0E0E0',
     ASSIGNMENT_BG: '#E3F2FD',
     TIMELINE_BG: '#F8F9FA'
@@ -81,7 +85,7 @@ function createPlanningMenu() {
     .addToUi();
 }
 
-// ==================== PLANNING CONFIG SETUP ====================
+// ==================== ENHANCED PLANNING CONFIG SETUP ====================
 function getOrCreatePlanningConfig() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let configSheet = ss.getSheetByName(PLANNING_CONFIG.CONFIG_SHEET_NAME);
@@ -128,34 +132,38 @@ function setupConfigSheet(sheet) {
     .setValue(PLANNING_CONFIG.DEFAULT_SPRINT_DURATION)
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
+  // First Sprint Number (NEW)
+  sheet.getRange('A5').setValue('First Sprint Number:');
+  sheet.getRange('B5').setValue(PLANNING_CONFIG.DEFAULT_FIRST_SPRINT)
+    .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
+  
   // Start Date
-  sheet.getRange('A5').setValue('Start Date:');
+  sheet.getRange('A6').setValue('Start Date:');
   const nextMonday = getNextMonday();
-  sheet.getRange('B5').setValue(nextMonday)
+  sheet.getRange('B6').setValue(nextMonday)
     .setNumberFormat('yyyy-MM-dd')
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
   // Sort By
-  sheet.getRange('A7').setValue('Sort Items By:');
+  sheet.getRange('A8').setValue('Sort Items By:');
   const sortValidation = SpreadsheetApp.newDataValidation()
     .requireValueInList(PLANNING_CONFIG.SORT_OPTIONS, true)
     .build();
-  sheet.getRange('B7').setDataValidation(sortValidation)
+  sheet.getRange('B8').setDataValidation(sortValidation)
     .setValue('Sprint')
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
   // Add border
-  sheet.getRange(3, 1, 5, 2).setBorder(true, true, true, true, true, true);
+  sheet.getRange(3, 1, 6, 2).setBorder(true, true, true, true, true, true);
 }
 
-// ==================== COMPLETE CLEARING FUNCTION ====================
+// ==================== FIXED CLEARING FUNCTION - PRESERVES TEAM WORK ====================
 function clearPlanningAreas(teamSheet) {
   try {
-    // Clear the entire manifest area completely - content, formatting, everything
+    // ONLY clear the workstream assignment area (14-60), NOT the team work area (62-91)
     teamSheet.getRange(14, 1, 47, 9).clear();
-    teamSheet.getRange(62, 1, 30, 9).clear();
     
-    // Clear any merged cells that might be left over
+    // Clear any merged cells in workstream area only
     for (let row = 14; row <= 60; row++) {
       try {
         teamSheet.getRange(row, 1, 1, 9).breakApart();
@@ -164,33 +172,24 @@ function clearPlanningAreas(teamSheet) {
       }
     }
     
-    // Clear any merged cells in team area
-    for (let row = 62; row <= 91; row++) {
-      try {
-        teamSheet.getRange(row, 1, 1, 9).breakApart();
-      } catch(e) {
-        // Cell wasn't merged, continue
-      }
-    }
-    
-    // Reset background colors to white
+    // Reset background colors to white in workstream area only
     teamSheet.getRange(14, 1, 47, 9).setBackground('#FFFFFF');
-    teamSheet.getRange(62, 1, 30, 9).setBackground('#FFFFFF');
     
-    // Clear any borders
+    // Clear any borders in workstream area only
     teamSheet.getRange(14, 1, 47, 9).setBorder(false, false, false, false, false, false);
-    teamSheet.getRange(62, 1, 30, 9).setBorder(false, false, false, false, false, false);
     
-    // Reset font styles
+    // Reset font styles in workstream area only
     teamSheet.getRange(14, 1, 47, 9).setFontWeight('normal').setFontStyle('normal');
-    teamSheet.getRange(62, 1, 30, 9).setFontWeight('normal').setFontStyle('normal');
+    
+    // Clear planning headers (G, H, I in row 13) but preserve original headers (A-F)
+    teamSheet.getRange(13, 7, 1, 3).clear();
     
   } catch(e) {
     console.log('Error clearing planning areas: ' + e);
   }
 }
 
-// ==================== APPLY SPRINT PLANNING ====================
+// ==================== ENHANCED SPRINT PLANNING ====================
 function applySprintPlanning() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -209,7 +208,8 @@ function applySprintPlanning() {
   
   // Get configuration
   const sprintDuration = configSheet.getRange('B4').getValue();
-  const startDate = new Date(configSheet.getRange('B5').getValue());
+  const firstSprintNumber = parseInt(configSheet.getRange('B5').getValue()) || PLANNING_CONFIG.DEFAULT_FIRST_SPRINT;
+  const startDate = new Date(configSheet.getRange('B6').getValue());
   
   // Process each team
   const teams = getTeamNames();
@@ -238,14 +238,14 @@ function applySprintPlanning() {
     const manifestItems = collectManifestItems(teamSheet, teamName);
     
     if (manifestItems.length > 0) {
-      // Clear areas completely first
+      // Clear areas completely first (but preserve team work)
       clearPlanningAreas(teamSheet);
       
       // Add sprint planning headers
       addSprintHeaders(teamSheet);
       
-      // Assign to sprints and reorganize
-      assignSprintsAndReorganize(teamSheet, manifestItems, netCapacity, sprintDuration, startDate);
+      // Smart sprint assignment and reorganization
+      smartSprintAssignment(teamSheet, manifestItems, netCapacity, sprintDuration, firstSprintNumber, startDate, teamName);
       successCount++;
     }
   });
@@ -259,7 +259,7 @@ function applySprintPlanning() {
   } else {
     SpreadsheetApp.getUi().alert(
       'Sprint Planning Applied',
-      `Successfully applied sprint planning to ${successCount} team(s).`,
+      `Successfully applied smart sprint planning to ${successCount} team(s).`,
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   }
@@ -269,7 +269,8 @@ function applySprintPlanning() {
 function collectManifestItems(teamSheet, teamName) {
   const manifestItems = [];
   
-  // Workstream items (rows 14-60)
+  // ONLY collect workstream items (rows 14-60) for sprint planning
+  // Team-initiated work (rows 62-91) stays in its own section
   for (let row = 14; row <= 60; row++) {
     try {
       const description = teamSheet.getRange(row, 2).getValue();
@@ -294,26 +295,8 @@ function collectManifestItems(teamSheet, teamName) {
     }
   }
   
-  // Team items (rows 62-91)
-  for (let row = 62; row <= 91; row++) {
-    try {
-      const description = teamSheet.getRange(row, 2).getValue();
-      const points = teamSheet.getRange(row, 4).getValue();
-      
-      if (description && points > 0 && description.trim() !== '') {
-        manifestItems.push({
-          origin: teamSheet.getRange(row, 1).getValue() || teamName,
-          description: description,
-          size: teamSheet.getRange(row, 3).getValue() || '-',
-          points: parseFloat(points) || 0,
-          goLiveDate: teamSheet.getRange(row, 5).getValue(),
-          source: 'Team'
-        });
-      }
-    } catch(e) {
-      continue;
-    }
-  }
+  // NOTE: Team items (rows 62-91) are NOT included in sprint planning
+  // They remain in their dedicated team section and are counted separately
   
   return manifestItems;
 }
@@ -338,23 +321,12 @@ function addSprintHeaders(teamSheet) {
   }
 }
 
-// ==================== ASSIGN SPRINTS AND REORGANIZE ====================
-function assignSprintsAndReorganize(teamSheet, items, capacity, sprintDuration, startDate) {
-  // Calculate sprint capacity
-  let sprintsInMonth, sprintCapacity;
-  
-  switch(sprintDuration) {
-    case '1 week':
-      sprintsInMonth = 4;
-      break;
-    case '1 month':
-      sprintsInMonth = 1;
-      break;
-    default: // 2 weeks
-      sprintsInMonth = 2;
-  }
-  
-  sprintCapacity = capacity > 0 ? capacity / sprintsInMonth : 20; // Default if no capacity
+// ==================== SMART SPRINT ASSIGNMENT ====================
+function smartSprintAssignment(teamSheet, items, capacity, sprintDuration, firstSprintNumber, startDate, teamName) {
+  // Calculate how many sprints we need based on capacity and total points
+  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
+  const targetSprintCapacity = Math.max(10, capacity / 2); // Target roughly half capacity per sprint
+  const estimatedSprintsNeeded = Math.max(2, Math.ceil(totalPoints / targetSprintCapacity));
   
   // Sort items by go-live date first
   items.sort((a, b) => {
@@ -363,49 +335,98 @@ function assignSprintsAndReorganize(teamSheet, items, capacity, sprintDuration, 
     return dateA - dateB;
   });
   
-  // Assign to sprints
-  let currentSprint = 1;
-  let currentSprintLoad = 0;
+  // Initialize sprint buckets starting from firstSprintNumber
+  const sprints = [];
+  for (let i = 0; i < estimatedSprintsNeeded; i++) {
+    const sprintNumber = firstSprintNumber + i;
+    sprints.push({
+      number: sprintNumber,
+      items: [],
+      totalPoints: 0,
+      startDate: calculateSprintDate(startDate, i, sprintDuration, true),
+      endDate: calculateSprintDate(startDate, i, sprintDuration, false)
+    });
+  }
   
+  // Smart assignment algorithm
   items.forEach(item => {
-    if (currentSprintLoad + item.points > sprintCapacity * 1.2 && currentSprintLoad > 0) {
-      currentSprint++;
-      currentSprintLoad = 0;
+    let bestSprintIndex = 0;
+    let bestScore = -1;
+    
+    // Find the best sprint for this item
+    for (let i = 0; i < sprints.length; i++) {
+      const sprint = sprints[i];
+      
+      // Skip if sprint is severely over capacity (more than 150% of target)
+      if (sprint.totalPoints >= targetSprintCapacity * 1.5) continue;
+      
+      // Calculate score based on:
+      // 1. How close go-live date is to sprint end
+      // 2. How much capacity is left in sprint
+      // 3. Preference for earlier sprints if dates are flexible
+      
+      let score = 0;
+      
+      // Date preference (higher score for better date fit)
+      if (item.goLiveDate && item.goLiveDate instanceof Date) {
+        const daysDiff = Math.abs((item.goLiveDate - sprint.endDate) / (1000 * 60 * 60 * 24));
+        score += Math.max(0, 100 - daysDiff); // Up to 100 points for perfect date fit
+      } else {
+        score += 50; // Neutral score for items without dates
+      }
+      
+      // Capacity preference (higher score for sprints with more capacity)
+      const capacityUtilization = sprint.totalPoints / targetSprintCapacity;
+      score += Math.max(0, (1 - capacityUtilization) * 50); // Up to 50 points for available capacity
+      
+      // Earlier sprint preference (small bias toward earlier sprints)
+      score += (sprints.length - i) * 5; // Up to 5 * sprintCount points for being earlier
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestSprintIndex = i;
+      }
     }
     
-    item.sprint = currentSprint;
-    item.sprintStart = calculateSprintDate(startDate, currentSprint - 1, sprintDuration, true);
-    item.sprintEnd = calculateSprintDate(startDate, currentSprint - 1, sprintDuration, false);
+    // Assign item to best sprint
+    const targetSprint = sprints[bestSprintIndex];
+    item.sprint = targetSprint.number;
+    item.sprintStart = targetSprint.startDate;
+    item.sprintEnd = targetSprint.endDate;
     
-    currentSprintLoad += item.points;
+    targetSprint.items.push(item);
+    targetSprint.totalPoints += item.points;
   });
   
-  // Group items by sprint
-  const sprintGroups = {};
-  items.forEach(item => {
-    if (!sprintGroups[item.sprint]) {
-      sprintGroups[item.sprint] = [];
-    }
-    sprintGroups[item.sprint].push(item);
-  });
-  
-  // Write back organized by sprint
+  // Write organized data back to sheet
+  writeSprintData(teamSheet, sprints, teamName);
+}
+
+// ==================== WRITE SPRINT DATA ====================
+function writeSprintData(teamSheet, sprints, teamName) {
   let currentRow = 14;
-  const sortedSprints = Object.keys(sprintGroups).sort((a, b) => parseInt(a) - parseInt(b));
   
-  sortedSprints.forEach(sprint => {
+  sprints.forEach(sprint => {
+    if (sprint.items.length === 0) return; // Skip empty sprints
     if (currentRow >= 61) return; // Don't overflow into team area
     
-    // Add sprint header
+    // Add sprint header with team name
     teamSheet.getRange(currentRow, 1, 1, 9).merge()
-      .setValue(`--- SPRINT ${sprint} ---`)
+      .setValue(`--- ${teamName.toUpperCase()} SPRINT ${sprint.number} (${sprint.totalPoints} pts) ---`)
       .setFontWeight('bold')
       .setBackground(PLANNING_CONFIG.COLORS.SPRINT_SEPARATOR)
       .setFontStyle('italic');
     currentRow++;
     
+    // Sort items within sprint by go-live date
+    sprint.items.sort((a, b) => {
+      const dateA = a.goLiveDate ? new Date(a.goLiveDate) : new Date('2099-12-31');
+      const dateB = b.goLiveDate ? new Date(b.goLiveDate) : new Date('2099-12-31');
+      return dateA - dateB;
+    });
+    
     // Add items in this sprint
-    sprintGroups[sprint].forEach(item => {
+    sprint.items.forEach(item => {
       if (currentRow >= 61) return;
       
       // Write item data
@@ -420,12 +441,12 @@ function assignSprintsAndReorganize(teamSheet, items, capacity, sprintDuration, 
         }
       }
       teamSheet.getRange(currentRow, 6).setValue(item.source);
-      teamSheet.getRange(currentRow, 7).setValue(`Sprint ${sprint}`);
+      teamSheet.getRange(currentRow, 7).setValue(`Sprint ${sprint.number}`);
       teamSheet.getRange(currentRow, 8).setValue(item.sprintStart).setNumberFormat('yyyy-MM-dd');
       teamSheet.getRange(currentRow, 9).setValue(item.sprintEnd).setNumberFormat('yyyy-MM-dd');
       
       // Apply sprint coloring
-      const sprintColor = getSprintColor(parseInt(sprint));
+      const sprintColor = getSprintColor(sprint.number);
       teamSheet.getRange(currentRow, 7, 1, 3).setBackground(sprintColor);
       
       currentRow++;
@@ -447,7 +468,7 @@ function assignSprintsAndReorganize(teamSheet, items, capacity, sprintDuration, 
   }
 }
 
-// ==================== FIXED WATERFALL PLANNING ====================
+// ==================== WATERFALL PLANNING (UNCHANGED) ====================
 function applyWaterfallSorting() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -462,7 +483,7 @@ function applyWaterfallSorting() {
   }
   
   const configSheet = getOrCreatePlanningConfig();
-  const startDate = new Date(configSheet.getRange('B5').getValue());
+  const startDate = new Date(configSheet.getRange('B6').getValue());
   const teams = getTeamNames();
   
   if (teams.length === 0) {
@@ -642,7 +663,7 @@ function clearAllPlanning() {
   const ui = SpreadsheetApp.getUi();
   const response = ui.alert(
     'Clear All Planning',
-    'This will completely remove all planning data and formatting from team sheets.\n\n' +
+    'This will remove planning data from workstream assignments but preserve team-initiated work.\n\n' +
     'You can regenerate the original manifests using:\n' +
     'Points System → Teams → Refresh Team Assignments\n\n' +
     'Continue?',
@@ -666,12 +687,8 @@ function clearAllPlanning() {
     if (!teamSheet) return;
     
     try {
-      // Complete clearing of planning areas
+      // Clear planning areas (preserving team-initiated work)
       clearPlanningAreas(teamSheet);
-      
-      // Clear planning headers (G, H, I in row 13)
-      teamSheet.getRange(13, 7, 1, 3).clear();
-      
       clearedCount++;
     } catch(e) {
       console.log(`Could not clear ${teamName}: ${e}`);
@@ -680,7 +697,8 @@ function clearAllPlanning() {
   
   ui.alert(
     'Planning Cleared',
-    `Completely cleared planning from ${clearedCount} team sheet(s).\n\n` +
+    `Cleared planning from ${clearedCount} team sheet(s).\n\n` +
+    'Team-initiated work has been preserved.\n\n' +
     'Use Points System → Teams → Refresh Team Assignments to restore original manifests.',
     ui.ButtonSet.OK
   );
@@ -722,7 +740,7 @@ function calculateSprintDate(startDate, sprintIndex, duration, isStart) {
   switch(duration) {
     case '1 week':
       date.setDate(date.getDate() + (sprintIndex * 7));
-      if (!isStart) date.setDate(date.getDate() + 4);
+      if (!isStart) date.setDate(date.getDate() + 6);
       break;
     case '2 weeks':
       date.setDate(date.getDate() + (sprintIndex * 14));
@@ -745,7 +763,9 @@ function getSprintColor(sprintNumber) {
     PLANNING_CONFIG.COLORS.SPRINT_1,
     PLANNING_CONFIG.COLORS.SPRINT_2,
     PLANNING_CONFIG.COLORS.SPRINT_3,
-    PLANNING_CONFIG.COLORS.SPRINT_4
+    PLANNING_CONFIG.COLORS.SPRINT_4,
+    PLANNING_CONFIG.COLORS.SPRINT_5,
+    PLANNING_CONFIG.COLORS.SPRINT_6
   ];
   return colors[(sprintNumber - 1) % colors.length];
 }
