@@ -1,13 +1,12 @@
 /**
- * Enhanced Planning Tools - Fixed Sprint Distribution & Team Work Preservation
- * Version: 4.0 - Smart Sprint Distribution & Bug Fixes
+ * Enhanced Planning Tools - Weekend-Aware Sprint Planning
+ * Version: 5.0 - Working Days Only
  * 
- * FIXES:
- * 1. Even distribution of points across sprints based on capacity
- * 2. Smart sorting by go-live dates within sprint constraints
- * 3. Configurable number of sprints
- * 4. Team names in sprint headers
- * 5. Preserves team-initiated work section when clearing
+ * NEW FEATURES:
+ * 1. Start and end dates skip weekends (Monday-Friday only)
+ * 2. Sprint capacity based on working days (5 days = 5 points per person per week)
+ * 3. Proper working day calculations for sprint durations
+ * 4. Smart date handling that respects business schedules
  */
 
 // ==================== CONSTANTS ====================
@@ -18,6 +17,8 @@ const PLANNING_CONFIG = {
   PLANNING_METHODS: ['Sprint', 'Waterfall'],
   SORT_OPTIONS: ['Sprint', 'Go-Live Date', 'Points'],
   DEFAULT_FIRST_SPRINT: 1,
+  WORKING_DAYS_PER_WEEK: 5, // Monday-Friday
+  POINTS_PER_PERSON_PER_WEEK: 5, // 1 point = 1 working day
   COLORS: {
     HEADER: '#4285F4',
     CONFIG_BG: '#F5F5F5',
@@ -32,6 +33,116 @@ const PLANNING_CONFIG = {
     TIMELINE_BG: '#F8F9FA'
   }
 };
+
+// ==================== WEEKEND-AWARE DATE FUNCTIONS ====================
+
+/**
+ * Adds working days to a date, skipping weekends
+ */
+function addWorkingDays(startDate, workingDays) {
+  const result = new Date(startDate);
+  let daysAdded = 0;
+  
+  while (daysAdded < workingDays) {
+    result.setDate(result.getDate() + 1);
+    // Skip weekends (0 = Sunday, 6 = Saturday)
+    if (result.getDay() !== 0 && result.getDay() !== 6) {
+      daysAdded++;
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Gets the next Monday from a given date
+ */
+function getNextMonday(date = new Date()) {
+  const result = new Date(date);
+  const day = result.getDay();
+  const daysUntilMonday = day === 0 ? 1 : (8 - day) % 7 || 7;
+  result.setDate(result.getDate() + daysUntilMonday);
+  return result;
+}
+
+/**
+ * Gets the previous Friday from a given date
+ */
+function getPreviousFriday(date) {
+  const result = new Date(date);
+  const day = result.getDay();
+  const daysSinceFriday = day === 0 ? 2 : (day + 2) % 7;
+  result.setDate(result.getDate() - daysSinceFriday);
+  return result;
+}
+
+/**
+ * Calculates working days between two dates
+ */
+function getWorkingDaysBetween(startDate, endDate) {
+  let workingDays = 0;
+  const current = new Date(startDate);
+  
+  while (current <= endDate) {
+    if (current.getDay() !== 0 && current.getDay() !== 6) {
+      workingDays++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return workingDays;
+}
+
+/**
+ * Calculates sprint dates based on working days only
+ */
+function calculateSprintDates(startDate, sprintIndex, duration, isStart) {
+  // Ensure we start on a Monday
+  const sprintStartMonday = getNextMonday(startDate);
+  
+  let workingDaysPerSprint;
+  switch(duration) {
+    case '1 week':
+      workingDaysPerSprint = 5; // 1 week = 5 working days
+      break;
+    case '2 weeks':
+      workingDaysPerSprint = 10; // 2 weeks = 10 working days
+      break;
+    case '1 month':
+      workingDaysPerSprint = 20; // 1 month = ~20 working days
+      break;
+    default:
+      workingDaysPerSprint = 10;
+  }
+  
+  if (isStart) {
+    // Calculate start date for this sprint
+    const totalWorkingDaysToSprint = sprintIndex * workingDaysPerSprint;
+    return addWorkingDays(new Date(sprintStartMonday.getTime() - 24 * 60 * 60 * 1000), totalWorkingDaysToSprint);
+  } else {
+    // Calculate end date for this sprint
+    const totalWorkingDaysToSprint = (sprintIndex + 1) * workingDaysPerSprint - 1;
+    return addWorkingDays(new Date(sprintStartMonday.getTime() - 24 * 60 * 60 * 1000), totalWorkingDaysToSprint);
+  }
+}
+
+/**
+ * Calculates realistic sprint capacity based on team size and working days
+ */
+function calculateSprintCapacity(teamMembers, sprintDuration) {
+  const membersCount = parseInt(teamMembers) || 1;
+  
+  switch(sprintDuration) {
+    case '1 week':
+      return membersCount * PLANNING_CONFIG.POINTS_PER_PERSON_PER_WEEK; // 5 points per person per week
+    case '2 weeks':
+      return membersCount * PLANNING_CONFIG.POINTS_PER_PERSON_PER_WEEK * 2; // 10 points per person per 2 weeks
+    case '1 month':
+      return membersCount * PLANNING_CONFIG.POINTS_PER_PERSON_PER_WEEK * 4; // 20 points per person per month
+    default:
+      return membersCount * 10; // Default to 2-week capacity
+  }
+}
 
 // ==================== INSTALLATION ====================
 /**
@@ -61,7 +172,10 @@ function installPlanningTools() {
   SpreadsheetApp.getUi().alert(
     'Planning Tools Installed!',
     'Planning Tools menu has been added to your spreadsheet.\n\n' +
-    'If you don\'t see both menus, please refresh the page.\n\n' +
+    'NEW: Sprint planning now respects weekends and working days!\n' +
+    '• Sprint dates are Monday-Friday only\n' +
+    '• Capacity calculated as 5 points per person per week\n' +
+    '• All dates skip weekends automatically\n\n' +
     'The Planning Tools menu will now appear automatically when you open this spreadsheet.',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
@@ -105,10 +219,11 @@ function setupConfigSheet(sheet) {
   // Set column widths
   sheet.setColumnWidth(1, 150);
   sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 250);
   
   // Title
-  sheet.getRange('A1:B1').merge()
-    .setValue('PLANNING CONFIGURATION')
+  sheet.getRange('A1:C1').merge()
+    .setValue('PLANNING CONFIGURATION - Working Days Only')
     .setFontSize(14)
     .setFontWeight('bold')
     .setBackground(PLANNING_CONFIG.COLORS.HEADER)
@@ -132,29 +247,49 @@ function setupConfigSheet(sheet) {
     .setValue(PLANNING_CONFIG.DEFAULT_SPRINT_DURATION)
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
-  // First Sprint Number (NEW)
+  // Working days explanation
+  sheet.getRange('C4').setValue('(Working days: 1 week=5 days, 2 weeks=10 days, 1 month=20 days)')
+    .setFontStyle('italic')
+    .setFontSize(9);
+  
+  // First Sprint Number
   sheet.getRange('A5').setValue('First Sprint Number:');
   sheet.getRange('B5').setValue(PLANNING_CONFIG.DEFAULT_FIRST_SPRINT)
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
-  // Start Date
+  // Start Date (will be adjusted to next Monday)
   sheet.getRange('A6').setValue('Start Date:');
   const nextMonday = getNextMonday();
   sheet.getRange('B6').setValue(nextMonday)
     .setNumberFormat('yyyy-MM-dd')
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
+  sheet.getRange('C6').setValue('(Automatically adjusted to next Monday)')
+    .setFontStyle('italic')
+    .setFontSize(9);
+  
+  // Working days info
+  sheet.getRange('A8').setValue('Working Days Info:');
+  sheet.getRange('B8').setValue('Monday - Friday only')
+    .setFontWeight('bold')
+    .setBackground('#E8F5E9');
+  
+  // Capacity calculation
+  sheet.getRange('A9').setValue('Sprint Capacity:');
+  sheet.getRange('B9').setValue('5 points per person per week')
+    .setFontWeight('bold')
+    .setBackground('#E8F5E9');
   
   // Sort By
-  sheet.getRange('A8').setValue('Sort Items By:');
+  sheet.getRange('A11').setValue('Sort Items By:');
   const sortValidation = SpreadsheetApp.newDataValidation()
     .requireValueInList(PLANNING_CONFIG.SORT_OPTIONS, true)
     .build();
-  sheet.getRange('B8').setDataValidation(sortValidation)
+  sheet.getRange('B11').setDataValidation(sortValidation)
     .setValue('Sprint')
     .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   
   // Add border
-  sheet.getRange(3, 1, 6, 2).setBorder(true, true, true, true, true, true);
+  sheet.getRange(3, 1, 9, 2).setBorder(true, true, true, true, true, true);
 }
 
 // ==================== FIXED CLEARING FUNCTION - PRESERVES TEAM WORK ====================
@@ -189,7 +324,7 @@ function clearPlanningAreas(teamSheet) {
   }
 }
 
-// ==================== ENHANCED SPRINT PLANNING ====================
+// ==================== ENHANCED SPRINT PLANNING WITH WORKING DAYS ====================
 function applySprintPlanning() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -209,7 +344,11 @@ function applySprintPlanning() {
   // Get configuration
   const sprintDuration = configSheet.getRange('B4').getValue();
   const firstSprintNumber = parseInt(configSheet.getRange('B5').getValue()) || PLANNING_CONFIG.DEFAULT_FIRST_SPRINT;
-  const startDate = new Date(configSheet.getRange('B6').getValue());
+  let startDate = new Date(configSheet.getRange('B6').getValue());
+  
+  // Ensure start date is a Monday
+  startDate = getNextMonday(startDate);
+  configSheet.getRange('B6').setValue(startDate); // Update config with Monday
   
   // Process each team
   const teams = getTeamNames();
@@ -225,10 +364,13 @@ function applySprintPlanning() {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    // Get team capacity safely
+    // Get team capacity and member count
     let netCapacity = 0;
+    let teamMembers = 1;
+    
     try {
       netCapacity = teamSheet.getRange('D7').getValue() || 0;
+      teamMembers = teamSheet.getRange('B4').getValue() || 1;
     } catch(e) {
       console.log(`Could not read capacity for ${teamName}`);
       return;
@@ -244,8 +386,8 @@ function applySprintPlanning() {
       // Add sprint planning headers
       addSprintHeaders(teamSheet);
       
-      // Smart sprint assignment and reorganization
-      smartSprintAssignment(teamSheet, manifestItems, netCapacity, sprintDuration, firstSprintNumber, startDate, teamName);
+      // Smart sprint assignment with working days
+      smartSprintAssignmentWithWorkingDays(teamSheet, manifestItems, teamMembers, sprintDuration, firstSprintNumber, startDate, teamName);
       successCount++;
     }
   });
@@ -259,7 +401,8 @@ function applySprintPlanning() {
   } else {
     SpreadsheetApp.getUi().alert(
       'Sprint Planning Applied',
-      `Successfully applied smart sprint planning to ${successCount} team(s).`,
+      `Successfully applied weekend-aware sprint planning to ${successCount} team(s).\n\n` +
+      'All dates respect working days (Monday-Friday only).',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   }
@@ -295,9 +438,6 @@ function collectManifestItems(teamSheet, teamName) {
     }
   }
   
-  // NOTE: Team items (rows 62-91) are NOT included in sprint planning
-  // They remain in their dedicated team section and are counted separately
-  
   return manifestItems;
 }
 
@@ -321,21 +461,28 @@ function addSprintHeaders(teamSheet) {
   }
 }
 
-// ==================== SMART SPRINT ASSIGNMENT ====================
-function smartSprintAssignment(teamSheet, items, capacity, sprintDuration, firstSprintNumber, startDate, teamName) {
-  // Calculate how many sprints we need based on capacity and total points
-  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
-  const targetSprintCapacity = Math.max(10, capacity / 2); // Target roughly half capacity per sprint
-  const estimatedSprintsNeeded = Math.max(2, Math.ceil(totalPoints / targetSprintCapacity));
+// ==================== SIMPLIFIED AND IMPROVED SPRINT ASSIGNMENT ====================
+function smartSprintAssignmentWithWorkingDays(teamSheet, items, teamMembers, sprintDuration, firstSprintNumber, startDate, teamName) {
+  // Calculate realistic sprint capacity based on working days
+  const sprintCapacity = calculateSprintCapacity(teamMembers, sprintDuration);
   
-  // Sort items by go-live date first
+  // Calculate how many sprints we need
+  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
+  const estimatedSprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
+  
+  // Sort items by go-live date first - this is the primary organizing principle
   items.sort((a, b) => {
     const dateA = a.goLiveDate ? new Date(a.goLiveDate) : new Date('2099-12-31');
     const dateB = b.goLiveDate ? new Date(b.goLiveDate) : new Date('2099-12-31');
-    return dateA - dateB;
+    
+    // Adjust weekend dates to previous Friday for comparison
+    const adjustedDateA = dateA.getDay() === 0 || dateA.getDay() === 6 ? getPreviousFriday(dateA) : dateA;
+    const adjustedDateB = dateB.getDay() === 0 || dateB.getDay() === 6 ? getPreviousFriday(dateB) : dateB;
+    
+    return adjustedDateA - adjustedDateB;
   });
   
-  // Initialize sprint buckets starting from firstSprintNumber
+  // Initialize sprint buckets
   const sprints = [];
   for (let i = 0; i < estimatedSprintsNeeded; i++) {
     const sprintNumber = firstSprintNumber + i;
@@ -343,53 +490,46 @@ function smartSprintAssignment(teamSheet, items, capacity, sprintDuration, first
       number: sprintNumber,
       items: [],
       totalPoints: 0,
-      startDate: calculateSprintDate(startDate, i, sprintDuration, true),
-      endDate: calculateSprintDate(startDate, i, sprintDuration, false)
+      startDate: calculateSprintDates(startDate, i, sprintDuration, true),
+      endDate: calculateSprintDates(startDate, i, sprintDuration, false),
+      capacity: sprintCapacity
     });
   }
   
-  // Smart assignment algorithm
+  // SIMPLE ALGORITHM: Fill sprints sequentially with capacity limits
+  let currentSprintIndex = 0;
+  
   items.forEach(item => {
-    let bestSprintIndex = 0;
-    let bestScore = -1;
+    // Try to fit in current sprint
+    let targetSprintIndex = currentSprintIndex;
     
-    // Find the best sprint for this item
-    for (let i = 0; i < sprints.length; i++) {
-      const sprint = sprints[i];
-      
-      // Skip if sprint is severely over capacity (more than 150% of target)
-      if (sprint.totalPoints >= targetSprintCapacity * 1.5) continue;
-      
-      // Calculate score based on:
-      // 1. How close go-live date is to sprint end
-      // 2. How much capacity is left in sprint
-      // 3. Preference for earlier sprints if dates are flexible
-      
-      let score = 0;
-      
-      // Date preference (higher score for better date fit)
-      if (item.goLiveDate && item.goLiveDate instanceof Date) {
-        const daysDiff = Math.abs((item.goLiveDate - sprint.endDate) / (1000 * 60 * 60 * 24));
-        score += Math.max(0, 100 - daysDiff); // Up to 100 points for perfect date fit
-      } else {
-        score += 50; // Neutral score for items without dates
+    // If current sprint would be over capacity, try next sprint
+    if (sprints[currentSprintIndex].totalPoints + item.points > sprintCapacity) {
+      // Move to next sprint if available
+      if (currentSprintIndex + 1 < sprints.length) {
+        currentSprintIndex++;
+        targetSprintIndex = currentSprintIndex;
       }
-      
-      // Capacity preference (higher score for sprints with more capacity)
-      const capacityUtilization = sprint.totalPoints / targetSprintCapacity;
-      score += Math.max(0, (1 - capacityUtilization) * 50); // Up to 50 points for available capacity
-      
-      // Earlier sprint preference (small bias toward earlier sprints)
-      score += (sprints.length - i) * 5; // Up to 5 * sprintCount points for being earlier
-      
-      if (score > bestScore) {
-        bestScore = score;
-        bestSprintIndex = i;
+      // If we're at the last sprint, we have to fit it somewhere
+    }
+    
+    // Special case: if item has a late go-live date and early sprints aren't full, 
+    // try to put it in a later sprint
+    const itemGoLiveDate = item.goLiveDate ? new Date(item.goLiveDate) : null;
+    if (itemGoLiveDate && itemGoLiveDate.getFullYear() < 2099) {
+      // Find the latest sprint that ends before this item's go-live date
+      for (let i = sprints.length - 1; i >= 0; i--) {
+        const sprint = sprints[i];
+        if (sprint.endDate <= itemGoLiveDate && 
+            sprint.totalPoints + item.points <= sprintCapacity * 1.1) {
+          targetSprintIndex = i;
+          break;
+        }
       }
     }
     
-    // Assign item to best sprint
-    const targetSprint = sprints[bestSprintIndex];
+    // Assign to target sprint
+    const targetSprint = sprints[targetSprintIndex];
     item.sprint = targetSprint.number;
     item.sprintStart = targetSprint.startDate;
     item.sprintEnd = targetSprint.endDate;
@@ -398,31 +538,104 @@ function smartSprintAssignment(teamSheet, items, capacity, sprintDuration, first
     targetSprint.totalPoints += item.points;
   });
   
+  // POST-PROCESSING: Simple rebalancing if there are severe imbalances
+  simpleRebalance(sprints, sprintCapacity);
+  
   // Write organized data back to sheet
-  writeSprintData(teamSheet, sprints, teamName);
+  writeSprintDataWithWorkingDays(teamSheet, sprints, teamName, sprintCapacity);
 }
 
-// ==================== WRITE SPRINT DATA ====================
-function writeSprintData(teamSheet, sprints, teamName) {
+// ==================== SIMPLE REBALANCING ====================
+function simpleRebalance(sprints, targetCapacity) {
+  let maxIterations = 3;
+  
+  while (maxIterations > 0) {
+    let moved = false;
+    maxIterations--;
+    
+    // Find overloaded and underloaded sprints
+    for (let i = 0; i < sprints.length - 1; i++) {
+      const currentSprint = sprints[i];
+      const nextSprint = sprints[i + 1];
+      
+      // If current sprint is over capacity and next sprint has room
+      if (currentSprint.totalPoints > targetCapacity && 
+          nextSprint.totalPoints < targetCapacity * 0.8) {
+        
+        // Find smallest item that can be moved
+        const movableItems = currentSprint.items
+          .filter(item => {
+            // Don't move items that would violate date constraints
+            if (item.goLiveDate && item.goLiveDate instanceof Date && item.goLiveDate.getFullYear() < 2099) {
+              return nextSprint.endDate <= item.goLiveDate;
+            }
+            return true;
+          })
+          .sort((a, b) => a.points - b.points); // Smallest first
+        
+        for (const item of movableItems) {
+          // Would this move improve the balance?
+          const newCurrentPoints = currentSprint.totalPoints - item.points;
+          const newNextPoints = nextSprint.totalPoints + item.points;
+          
+          if (newCurrentPoints >= targetCapacity * 0.5 && 
+              newNextPoints <= targetCapacity * 1.1) {
+            
+            // Move the item
+            currentSprint.items = currentSprint.items.filter(i => i !== item);
+            currentSprint.totalPoints -= item.points;
+            
+            nextSprint.items.push(item);
+            nextSprint.totalPoints += item.points;
+            
+            // Update item assignment
+            item.sprint = nextSprint.number;
+            item.sprintStart = nextSprint.startDate;
+            item.sprintEnd = nextSprint.endDate;
+            
+            moved = true;
+            break;
+          }
+        }
+      }
+      
+      if (moved) break; // Only one move per iteration
+    }
+    
+    if (!moved) break; // No more beneficial moves found
+  }
+}
+
+// ==================== WRITE SPRINT DATA WITH WORKING DAYS ====================
+function writeSprintDataWithWorkingDays(teamSheet, sprints, teamName, sprintCapacity) {
   let currentRow = 14;
   
   sprints.forEach(sprint => {
     if (sprint.items.length === 0) return; // Skip empty sprints
     if (currentRow >= 61) return; // Don't overflow into team area
     
-    // Add sprint header with team name
+    // Calculate utilization percentage
+    const utilization = Math.round((sprint.totalPoints / sprint.capacity) * 100);
+    const utilizationIcon = utilization > 100 ? '⚠️' : utilization > 90 ? '🔥' : '✅';
+    
+    // Add sprint header with capacity info
     teamSheet.getRange(currentRow, 1, 1, 9).merge()
-      .setValue(`--- ${teamName.toUpperCase()} SPRINT ${sprint.number} (${sprint.totalPoints} pts) ---`)
+      .setValue(`--- ${teamName.toUpperCase()} SPRINT ${sprint.number} (${sprint.totalPoints}/${sprint.capacity} pts - ${utilization}% ${utilizationIcon}) ---`)
       .setFontWeight('bold')
       .setBackground(PLANNING_CONFIG.COLORS.SPRINT_SEPARATOR)
       .setFontStyle('italic');
     currentRow++;
     
-    // Sort items within sprint by go-live date
+    // Sort items within sprint by go-live date (adjusted for working days)
     sprint.items.sort((a, b) => {
       const dateA = a.goLiveDate ? new Date(a.goLiveDate) : new Date('2099-12-31');
       const dateB = b.goLiveDate ? new Date(b.goLiveDate) : new Date('2099-12-31');
-      return dateA - dateB;
+      
+      // Adjust weekend dates to previous Friday for sorting
+      const adjustedDateA = dateA.getDay() === 0 || dateA.getDay() === 6 ? getPreviousFriday(dateA) : dateA;
+      const adjustedDateB = dateB.getDay() === 0 || dateB.getDay() === 6 ? getPreviousFriday(dateB) : dateB;
+      
+      return adjustedDateA - adjustedDateB;
     });
     
     // Add items in this sprint
@@ -434,12 +647,14 @@ function writeSprintData(teamSheet, sprints, teamName) {
       teamSheet.getRange(currentRow, 2).setValue(item.description);
       teamSheet.getRange(currentRow, 3).setValue(item.size);
       teamSheet.getRange(currentRow, 4).setValue(item.points).setNumberFormat('0');
+      
       if (item.goLiveDate) {
         teamSheet.getRange(currentRow, 5).setValue(item.goLiveDate);
         if (item.goLiveDate instanceof Date) {
           teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
         }
       }
+      
       teamSheet.getRange(currentRow, 6).setValue(item.source);
       teamSheet.getRange(currentRow, 7).setValue(`Sprint ${sprint.number}`);
       teamSheet.getRange(currentRow, 8).setValue(item.sprintStart).setNumberFormat('yyyy-MM-dd');
@@ -468,7 +683,7 @@ function writeSprintData(teamSheet, sprints, teamName) {
   }
 }
 
-// ==================== WATERFALL PLANNING (UNCHANGED) ====================
+// ==================== ENHANCED WATERFALL PLANNING WITH WORKING DAYS ====================
 function applyWaterfallSorting() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -483,7 +698,12 @@ function applyWaterfallSorting() {
   }
   
   const configSheet = getOrCreatePlanningConfig();
-  const startDate = new Date(configSheet.getRange('B6').getValue());
+  let startDate = new Date(configSheet.getRange('B6').getValue());
+  
+  // Ensure start date is a Monday
+  startDate = getNextMonday(startDate);
+  configSheet.getRange('B6').setValue(startDate);
+  
   const teams = getTeamNames();
   
   if (teams.length === 0) {
@@ -499,11 +719,9 @@ function applyWaterfallSorting() {
     
     // Get team configuration
     let teamMembers = 1;
-    let netCapacity = 20;
     
     try {
       teamMembers = teamSheet.getRange('B4').getValue() || 1;
-      netCapacity = teamSheet.getRange('D7').getValue() || 20;
     } catch(e) {
       console.log(`Could not read team config for ${teamName}`);
     }
@@ -512,8 +730,8 @@ function applyWaterfallSorting() {
     const manifestItems = collectManifestItems(teamSheet, teamName);
     
     if (manifestItems.length > 0) {
-      // Apply sequential waterfall planning
-      applySequentialWaterfall(teamSheet, manifestItems, teamMembers, startDate);
+      // Apply sequential waterfall planning with working days
+      applySequentialWaterfallWithWorkingDays(teamSheet, manifestItems, teamMembers, startDate);
       successCount++;
     }
   });
@@ -523,33 +741,39 @@ function applyWaterfallSorting() {
   } else {
     SpreadsheetApp.getUi().alert(
       'Waterfall Planning Applied',
-      `Successfully applied sequential waterfall planning to ${successCount} team(s).`,
+      `Successfully applied working-day waterfall planning to ${successCount} team(s).\n\n` +
+      'All dates respect weekends (Monday-Friday scheduling only).',
       SpreadsheetApp.getUi().ButtonSet.OK
     );
   }
 }
 
-// ==================== APPLY SEQUENTIAL WATERFALL ====================
-function applySequentialWaterfall(teamSheet, items, teamMembers, startDate) {
-  // Sort items by go-live date
+// ==================== APPLY SEQUENTIAL WATERFALL WITH WORKING DAYS ====================
+function applySequentialWaterfallWithWorkingDays(teamSheet, items, teamMembers, startDate) {
+  // Sort items by go-live date (adjusted for working days)
   items.sort((a, b) => {
     const dateA = a.goLiveDate ? new Date(a.goLiveDate) : new Date('2099-12-31');
     const dateB = b.goLiveDate ? new Date(b.goLiveDate) : new Date('2099-12-31');
-    return dateA - dateB;
+    
+    // Adjust weekend dates to previous Friday
+    const adjustedDateA = dateA.getDay() === 0 || dateA.getDay() === 6 ? getPreviousFriday(dateA) : dateA;
+    const adjustedDateB = dateB.getDay() === 0 || dateB.getDay() === 6 ? getPreviousFriday(dateB) : dateB;
+    
+    return adjustedDateA - adjustedDateB;
   });
   
-  // Calculate team member schedules
+  // Calculate team member schedules (working days only)
   const teamMemberSchedules = [];
   for (let i = 1; i <= teamMembers; i++) {
     teamMemberSchedules.push({
       id: i,
       name: `Team Member ${i}`,
-      nextAvailableDate: new Date(startDate),
+      nextAvailableDate: getNextMonday(startDate), // Start on Monday
       totalPoints: 0
     });
   }
   
-  // Assign items to team members sequentially
+  // Assign items to team members sequentially (working days only)
   const scheduledItems = [];
   
   items.forEach(item => {
@@ -558,19 +782,20 @@ function applySequentialWaterfall(teamSheet, items, teamMembers, startDate) {
       current.nextAvailableDate < earliest.nextAvailableDate ? current : earliest
     );
     
-    // Calculate task duration (1 point = 1 day, minimum 1 day)
-    const taskDays = Math.max(1, Math.round(item.points));
+    // Calculate task duration in working days (1 point = 1 working day, minimum 1 day)
+    const taskWorkingDays = Math.max(1, Math.round(item.points));
     
-    // Set start date (when this team member is available)
-    const taskStart = new Date(availableMember.nextAvailableDate);
+    // Set start date (when this team member is available - ensure it's a working day)
+    let taskStart = new Date(availableMember.nextAvailableDate);
+    if (taskStart.getDay() === 0 || taskStart.getDay() === 6) {
+      taskStart = getNextMonday(taskStart);
+    }
     
-    // Calculate end date (add working days)
-    const taskEnd = new Date(taskStart);
-    taskEnd.setDate(taskEnd.getDate() + taskDays - 1);
+    // Calculate end date using working days
+    const taskEnd = addWorkingDays(taskStart, taskWorkingDays - 1);
     
-    // Update team member's next available date
-    availableMember.nextAvailableDate = new Date(taskEnd);
-    availableMember.nextAvailableDate.setDate(availableMember.nextAvailableDate.getDate() + 1);
+    // Update team member's next available date (next working day after task ends)
+    availableMember.nextAvailableDate = addWorkingDays(taskEnd, 1);
     availableMember.totalPoints += item.points;
     
     // Add to scheduled items
@@ -725,39 +950,6 @@ function getTeamNames() {
   return teams;
 }
 
-function getNextMonday() {
-  const today = new Date();
-  const day = today.getDay();
-  const diff = day === 0 ? 1 : (8 - day) % 7 || 7;
-  const nextMonday = new Date(today);
-  nextMonday.setDate(today.getDate() + diff);
-  return nextMonday;
-}
-
-function calculateSprintDate(startDate, sprintIndex, duration, isStart) {
-  const date = new Date(startDate);
-  
-  switch(duration) {
-    case '1 week':
-      date.setDate(date.getDate() + (sprintIndex * 7));
-      if (!isStart) date.setDate(date.getDate() + 6);
-      break;
-    case '2 weeks':
-      date.setDate(date.getDate() + (sprintIndex * 14));
-      if (!isStart) date.setDate(date.getDate() + 13);
-      break;
-    case '1 month':
-      date.setMonth(date.getMonth() + sprintIndex);
-      if (!isStart) {
-        date.setMonth(date.getMonth() + 1);
-        date.setDate(0); // Last day of month
-      }
-      break;
-  }
-  
-  return date;
-}
-
 function getSprintColor(sprintNumber) {
   const colors = [
     PLANNING_CONFIG.COLORS.SPRINT_1,
@@ -774,4 +966,42 @@ function openPlanningSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const configSheet = getOrCreatePlanningConfig();
   ss.setActiveSheet(configSheet);
+}
+
+// ==================== UTILITY FUNCTIONS FOR TESTING ====================
+
+/**
+ * Test function to validate working day calculations
+ * Run this to verify the weekend logic is working correctly
+ */
+function testWorkingDayLogic() {
+  const startDate = new Date('2025-01-15'); // Wednesday
+  
+  console.log('Testing Working Day Logic:');
+  console.log('Start date:', startDate.toDateString());
+  console.log('Next Monday:', getNextMonday(startDate).toDateString());
+  
+  // Test adding working days
+  const after5Days = addWorkingDays(startDate, 5);
+  console.log('After 5 working days:', after5Days.toDateString());
+  
+  // Test sprint calculations
+  const sprint1Start = calculateSprintDates(startDate, 0, '2 weeks', true);
+  const sprint1End = calculateSprintDates(startDate, 0, '2 weeks', false);
+  console.log('Sprint 1 Start:', sprint1Start.toDateString());
+  console.log('Sprint 1 End:', sprint1End.toDateString());
+  
+  // Test sprint capacity
+  const capacity = calculateSprintCapacity(3, '2 weeks');
+  console.log('Sprint capacity for 3 people, 2 weeks:', capacity, 'points');
+  
+  SpreadsheetApp.getUi().alert(
+    'Working Day Logic Test',
+    'Check the console log for test results.\n\n' +
+    'Key validations:\n' +
+    '• Sprint dates are Monday-Friday only\n' +
+    '• Sprint capacity = team members × 5 points per week\n' +
+    '• Working days skip weekends correctly',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
 }
