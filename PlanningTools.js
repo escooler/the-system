@@ -1,12 +1,12 @@
 /**
- * Planning Tools - Fixed Sprint Distribution
- * Version: 6.0
+ * Planning Tools - Enhanced with Tweakable Plans
+ * Version: 7.0
  * 
- * FIXES:
- * 1. Sprint dates now properly respect Planning Config start date
- * 2. Better distribution algorithm that actually spreads work across sprints
- * 3. Proper capacity-based allocation
- * 4. Respects working days (Monday-Friday only)
+ * NEW FEATURES:
+ * 1. Waterfall now groups by team members instead of phases
+ * 2. Sprint/Person assignments are now dropdown-editable
+ * 3. Refresh function reorganizes based on dropdown changes
+ * 4. Removed phase concept from waterfall
  */
 
 // ==================== CONSTANTS ====================
@@ -16,6 +16,7 @@ const PLANNING_CONFIG = {
   SPRINT_DURATIONS: ['1 week', '2 weeks', '1 month'],
   PLANNING_METHODS: ['Sprint', 'Waterfall'],
   DEFAULT_FIRST_SPRINT: 1,
+  DEFAULT_TEAM_SIZE: 5, // Default number of team members
   WORKING_DAYS_PER_WEEK: 5,
   COLORS: {
     HEADER: '#4285F4',
@@ -26,7 +27,12 @@ const PLANNING_CONFIG = {
     SPRINT_4: '#F3E5F5',
     SPRINT_5: '#E1F5FE',
     SPRINT_6: '#FCE4EC',
-    SPRINT_SEPARATOR: '#E0E0E0'
+    SPRINT_SEPARATOR: '#E0E0E0',
+    PERSON_1: '#E8F5E9',
+    PERSON_2: '#FFF9C4',
+    PERSON_3: '#FFE0B2',
+    PERSON_4: '#F3E5F5',
+    PERSON_5: '#E1F5FE'
   }
 };
 
@@ -74,7 +80,7 @@ function installPlanningTools() {
   
   SpreadsheetApp.getUi().alert(
     'Planning Tools Installed!',
-    'Sprint planning will now properly distribute work and respect configured start dates.',
+    'Version 7.0 - Now with editable assignments and refresh capability!',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -84,7 +90,9 @@ function createPlanningMenu() {
   
   ui.createMenu('Planning Tools')
     .addItem('🎯 Apply Sprint Planning', 'applySprintPlanning')
-    .addItem('🌊 Apply Waterfall Planning', 'applyWaterfallPlanning')
+    .addItem('👥 Apply Waterfall Planning (by Person)', 'applyWaterfallPlanning')
+    .addSeparator()
+    .addItem('🔄 Refresh Planning Display', 'refreshPlanningDisplay')
     .addSeparator()
     .addItem('⚙️ Planning Settings', 'openPlanningSettings')
     .addItem('🧹 Clear All Planning', 'clearAllPlanning')
@@ -149,10 +157,18 @@ function setupConfigSheet(sheet) {
     .setFontStyle('italic')
     .setFontSize(9);
   
-  sheet.getRange(3, 1, 4, 2).setBorder(true, true, true, true, true, true);
+  // Add team size configuration for waterfall
+  sheet.getRange('A7').setValue('Team Size:');
+  sheet.getRange('B7').setValue(PLANNING_CONFIG.DEFAULT_TEAM_SIZE)
+    .setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
+  sheet.getRange('C7').setValue('(For waterfall planning)')
+    .setFontStyle('italic')
+    .setFontSize(9);
+  
+  sheet.getRange(3, 1, 5, 2).setBorder(true, true, true, true, true, true);
 }
 
-// ==================== SPRINT PLANNING ====================
+// ==================== SPRINT PLANNING WITH DROPDOWNS ====================
 function applySprintPlanning() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -166,7 +182,6 @@ function applySprintPlanning() {
   const firstSprintNumber = parseInt(configSheet.getRange('B5').getValue()) || 1;
   let startDate = new Date(configSheet.getRange('B6').getValue());
   
-  // Ensure start date is Monday
   startDate = getNextMonday(startDate);
   configSheet.getRange('B6').setValue(startDate);
   
@@ -188,280 +203,194 @@ function applySprintPlanning() {
     if (manifestItems.length > 0) {
       clearPlanningAreas(teamSheet);
       addSprintHeaders(teamSheet);
+      
+      // Calculate sprints needed
+      const workingDaysPerSprint = getWorkingDaysForDuration(sprintDuration);
+      const sprintCapacity = Math.round(netCapacity * (workingDaysPerSprint / 20));
+      const totalPoints = manifestItems.reduce((sum, item) => sum + item.points, 0);
+      const sprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
+      
+      // Distribute to sprints
       distributeToSprints(teamSheet, manifestItems, netCapacity, sprintDuration, firstSprintNumber, startDate);
+      
+      // Add sprint dropdowns
+      addSprintDropdowns(teamSheet, manifestItems.length, sprintsNeeded, firstSprintNumber);
+      
       successCount++;
     }
   });
   
   if (successCount > 0) {
     SpreadsheetApp.getUi().alert('Sprint Planning Applied', 
-      `Successfully applied sprint planning to ${successCount} team(s).`, 
+      `Successfully applied sprint planning to ${successCount} team(s).\n\nYou can now adjust assignments using the dropdowns and click "Refresh Planning Display" to reorganize.`, 
       SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
 
-// ==================== IMPROVED SPRINT DISTRIBUTION ====================
-function distributeToSprints(teamSheet, items, teamNetCapacity, sprintDuration, firstSprintNumber, startDate) {
-  // Calculate working days per sprint
-  const workingDaysPerSprint = getWorkingDaysForDuration(sprintDuration);
-  
-  // Calculate capacity per sprint (proportional to sprint duration)
-  const sprintCapacity = Math.round(teamNetCapacity * (workingDaysPerSprint / 20)); // 20 working days per month
-  
-  // Calculate total points and number of sprints needed
-  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
-  const sprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
-  
-  // Initialize sprints with CORRECT dates from config
-  const sprints = [];
+// ==================== ADD SPRINT DROPDOWNS ====================
+function addSprintDropdowns(teamSheet, itemCount, sprintsNeeded, firstSprintNumber) {
+  // Create list of sprint options
+  const sprintOptions = [];
   for (let i = 0; i < sprintsNeeded; i++) {
-    const sprintNum = firstSprintNumber + i;
-    sprints.push({
-      number: sprintNum,
+    sprintOptions.push(`Sprint ${firstSprintNumber + i}`);
+  }
+  
+  // Add validation to column G (Sprint assignment)
+  let currentRow = 14;
+  let actualItemCount = 0;
+  
+  // Count actual items (skip headers)
+  for (let row = 14; row <= Math.min(60, 14 + itemCount * 1.5); row++) {
+    const description = teamSheet.getRange(row, 2).getValue();
+    if (description && !description.toString().startsWith('---')) {
+      actualItemCount++;
+    }
+  }
+  
+  // Apply dropdowns to actual items
+  currentRow = 14;
+  let itemsProcessed = 0;
+  
+  while (currentRow <= 60 && itemsProcessed < actualItemCount) {
+    const description = teamSheet.getRange(currentRow, 2).getValue();  // Fixed: was 'row', should be 'currentRow'
+    
+    if (description && !description.toString().startsWith('---')) {
+      const validation = SpreadsheetApp.newDataValidation()
+        .requireValueInList(sprintOptions, true)
+        .setAllowInvalid(false)
+        .build();
+      
+      teamSheet.getRange(currentRow, 7).setDataValidation(validation);
+      itemsProcessed++;
+    }
+    currentRow++;
+  }
+}
+
+// ==================== WATERFALL PLANNING WITH PERSON ASSIGNMENT ====================
+function applyWaterfallPlanning() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  if (!verifyPointsSystem()) {
+    SpreadsheetApp.getUi().alert('Points System not found.');
+    return;
+  }
+  
+  const configSheet = getOrCreatePlanningConfig();
+  let startDate = new Date(configSheet.getRange('B6').getValue());
+  startDate = getNextMonday(startDate);
+  
+  const teamSize = parseInt(configSheet.getRange('B7').getValue()) || PLANNING_CONFIG.DEFAULT_TEAM_SIZE;
+  
+  const teams = getTeamNames();
+  let successCount = 0;
+  
+  teams.forEach(teamName => {
+    const teamSheet = ss.getSheetByName(teamName + ' Team');
+    if (!teamSheet) return;
+    
+    const netCapacity = teamSheet.getRange('D7').getValue() || 0;
+    const manifestItems = collectManifestItems(teamSheet);
+    
+    if (manifestItems.length > 0) {
+      clearPlanningAreas(teamSheet);
+      addWaterfallHeaders(teamSheet);
+      
+      // Distribute to people
+      distributeToTeamMembers(teamSheet, manifestItems, teamSize, netCapacity, startDate);
+      
+      // Add person dropdowns
+      addPersonDropdowns(teamSheet, manifestItems.length, teamSize);
+      
+      successCount++;
+    }
+  });
+  
+  if (successCount > 0) {
+    SpreadsheetApp.getUi().alert('Waterfall Planning Applied', 
+      `Applied to ${successCount} team(s) with ${teamSize} team members each.\n\nYou can adjust assignments and click "Refresh Planning Display" to reorganize.`, 
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+// ==================== DISTRIBUTE TO TEAM MEMBERS ====================
+function distributeToTeamMembers(teamSheet, items, teamSize, teamNetCapacity, startDate) {
+  // Calculate capacity per person
+  const capacityPerPerson = Math.round(teamNetCapacity / teamSize);
+  
+  // Initialize team members
+  const teamMembers = [];
+  for (let i = 0; i < teamSize; i++) {
+    teamMembers.push({
+      number: i + 1,
       items: [],
       totalPoints: 0,
-      capacity: sprintCapacity,
-      startDate: calculateSprintStart(startDate, i, workingDaysPerSprint),
-      endDate: calculateSprintEnd(startDate, i, workingDaysPerSprint)
+      capacity: capacityPerPerson,
+      currentDate: new Date(startDate)
     });
   }
   
-  // BALANCED DISTRIBUTION ALGORITHM
-  // Goal: Even distribution across all sprints while respecting date constraints
+  // Sort items by go-live date priority
+  items.sort((a, b) => {
+    const dateA = a.goLiveDate || new Date('2099-12-31');
+    const dateB = b.goLiveDate || new Date('2099-12-31');
+    return dateA - dateB;
+  });
   
-  // Step 1: Separate items by date constraints
-  const dateConstrainedItems = [];
-  const flexibleItems = [];
-  
+  // Distribute items using round-robin with load balancing
   items.forEach(item => {
-    if (item.goLiveDate && item.goLiveDate instanceof Date && item.goLiveDate.getFullYear() < 2099) {
-      // Find which sprints this item can fit in based on date
-      const validSprints = sprints.filter(sprint => sprint.endDate <= item.goLiveDate);
-      if (validSprints.length === 1) {
-        // Only one sprint option - must go there
-        dateConstrainedItems.push({...item, mustBeSprint: validSprints[0].number});
-      } else if (validSprints.length > 1) {
-        // Multiple sprint options - flexible but date-aware
-        flexibleItems.push({...item, validSprintNumbers: validSprints.map(s => s.number)});
-      } else {
-        // No valid sprint based on date - treat as flexible
-        flexibleItems.push({...item, validSprintNumbers: sprints.map(s => s.number)});
-      }
-    } else {
-      // No date constraint - fully flexible
-      flexibleItems.push({...item, validSprintNumbers: sprints.map(s => s.number)});
+    // Find person with least load
+    let selectedPerson = teamMembers.reduce((minPerson, person) => 
+      person.totalPoints < minPerson.totalPoints ? person : minPerson
+    );
+    
+    // Calculate dates for this item
+    const workingDays = Math.max(1, Math.round(item.points));
+    item.startDate = new Date(selectedPerson.currentDate);
+    
+    // Skip weekends for start date
+    while (item.startDate.getDay() === 0 || item.startDate.getDay() === 6) {
+      item.startDate.setDate(item.startDate.getDate() + 1);
     }
+    
+    item.endDate = addWorkingDays(item.startDate, workingDays - 1);
+    item.assignedPerson = selectedPerson.number;
+    
+    // Add to person's list
+    selectedPerson.items.push(item);
+    selectedPerson.totalPoints += item.points;
+    selectedPerson.currentDate = addWorkingDays(item.endDate, 1);
   });
   
-  // Step 2: Place date-constrained items first
-  dateConstrainedItems.forEach(item => {
-    const sprint = sprints.find(s => s.number === item.mustBeSprint);
-    if (sprint) {
-      sprint.items.push(item);
-      sprint.totalPoints += item.points;
-    }
-  });
-  
-  // Step 3: Sort flexible items by size (largest first for better bin packing)
-  flexibleItems.sort((a, b) => b.points - a.points);
-  
-  // Step 4: Place flexible items using "best fit decreasing" strategy
-  flexibleItems.forEach(item => {
-    // Find valid sprint with lowest current load
-    let bestSprint = null;
-    let minLoad = Infinity;
-    
-    sprints.forEach(sprint => {
-      // Check if this sprint is valid for this item
-      const isValid = !item.validSprintNumbers || item.validSprintNumbers.includes(sprint.number);
-      
-      if (isValid) {
-        // Prefer sprints that are under capacity
-        const loadAfterAdding = sprint.totalPoints + item.points;
-        const loadRatio = loadAfterAdding / sprintCapacity;
-        
-        // Scoring function: prefer sprints that will be closest to target capacity after adding
-        const score = Math.abs(1.0 - loadRatio); // Distance from 100% capacity
-        
-        if (sprint.totalPoints < minLoad || 
-            (loadRatio <= 1.1 && score < Math.abs(1.0 - (minLoad / sprintCapacity)))) {
-          bestSprint = sprint;
-          minLoad = sprint.totalPoints;
-        }
-      }
-    });
-    
-    if (bestSprint) {
-      bestSprint.items.push(item);
-      bestSprint.totalPoints += item.points;
-    }
-  });
-  
-  // Step 5: Final rebalancing pass
-  rebalanceSprints(sprints, sprintCapacity);
-  
-  // Write to sheet
-  writeSprintsToSheet(teamSheet, sprints);
+  // Write to sheet grouped by person
+  writePersonGroupsToSheet(teamSheet, teamMembers);
 }
 
-// ==================== ENHANCED REBALANCING ====================
-function rebalanceSprints(sprints, targetCapacity) {
-  // Aggressive rebalancing for even distribution
-  const maxIterations = 20; // More iterations
-  const targetUtilization = 0.9; // Aim for 90% utilization
-  
-  for (let iter = 0; iter < maxIterations; iter++) {
-    let moved = false;
-    
-    // Calculate average load
-    const avgLoad = sprints.reduce((sum, s) => sum + s.totalPoints, 0) / sprints.length;
-    
-    // Find most imbalanced pair of sprints
-    let maxDiff = 0;
-    let overloadedSprint = null;
-    let underloadedSprint = null;
-    
-    for (let i = 0; i < sprints.length; i++) {
-      for (let j = 0; j < sprints.length; j++) {
-        if (i === j) continue;
-        
-        const diff = sprints[i].totalPoints - sprints[j].totalPoints;
-        if (diff > maxDiff && diff > targetCapacity * 0.2) { // Only rebalance if difference > 20%
-          maxDiff = diff;
-          overloadedSprint = sprints[i];
-          underloadedSprint = sprints[j];
-        }
-      }
-    }
-    
-    if (!overloadedSprint || !underloadedSprint) break;
-    
-    // Try to move items from overloaded to underloaded
-    overloadedSprint.items.sort((a, b) => a.points - b.points); // Start with smallest
-    
-    for (let i = 0; i < overloadedSprint.items.length; i++) {
-      const item = overloadedSprint.items[i];
-      
-      // Check if moving this item would improve balance
-      const newOverloadedTotal = overloadedSprint.totalPoints - item.points;
-      const newUnderloadedTotal = underloadedSprint.totalPoints + item.points;
-      
-      // Only move if it improves overall balance
-      const currentDiff = Math.abs(overloadedSprint.totalPoints - underloadedSprint.totalPoints);
-      const newDiff = Math.abs(newOverloadedTotal - newUnderloadedTotal);
-      
-      if (newDiff < currentDiff && newUnderloadedTotal <= targetCapacity * 1.1) {
-        // Check date constraint if moving to later sprint
-        let canMove = true;
-        if (underloadedSprint.number > overloadedSprint.number && 
-            item.goLiveDate && item.goLiveDate instanceof Date) {
-          canMove = underloadedSprint.endDate <= item.goLiveDate;
-        }
-        
-        if (canMove) {
-          // Move the item
-          overloadedSprint.items.splice(i, 1);
-          overloadedSprint.totalPoints = newOverloadedTotal;
-          underloadedSprint.items.push(item);
-          underloadedSprint.totalPoints = newUnderloadedTotal;
-          moved = true;
-          break;
-        }
-      }
-    }
-    
-    if (!moved) {
-      // Try medium-sized items if small items didn't work
-      const midSizeItems = overloadedSprint.items.filter(i => 
-        i.points >= 3 && i.points <= 5
-      );
-      
-      for (const item of midSizeItems) {
-        const newOverloadedTotal = overloadedSprint.totalPoints - item.points;
-        const newUnderloadedTotal = underloadedSprint.totalPoints + item.points;
-        
-        if (Math.abs(newOverloadedTotal - avgLoad) < Math.abs(overloadedSprint.totalPoints - avgLoad) &&
-            Math.abs(newUnderloadedTotal - avgLoad) < Math.abs(underloadedSprint.totalPoints - avgLoad)) {
-          
-          // Check date constraint
-          let canMove = true;
-          if (underloadedSprint.number > overloadedSprint.number && 
-              item.goLiveDate && item.goLiveDate instanceof Date) {
-            canMove = underloadedSprint.endDate <= item.goLiveDate;
-          }
-          
-          if (canMove) {
-            const idx = overloadedSprint.items.indexOf(item);
-            overloadedSprint.items.splice(idx, 1);
-            overloadedSprint.totalPoints = newOverloadedTotal;
-            underloadedSprint.items.push(item);
-            underloadedSprint.totalPoints = newUnderloadedTotal;
-            moved = true;
-            break;
-          }
-        }
-      }
-    }
-    
-    if (!moved) break;
-  }
-}
-
-// ==================== DATE CALCULATIONS ====================
-function getWorkingDaysForDuration(duration) {
-  switch(duration) {
-    case '1 week': return 5;
-    case '2 weeks': return 10;
-    case '1 month': return 20;
-    default: return 10;
-  }
-}
-
-function calculateSprintStart(configStartDate, sprintIndex, workingDaysPerSprint) {
-  const totalWorkingDays = sprintIndex * workingDaysPerSprint;
-  
-  if (sprintIndex === 0) {
-    return new Date(configStartDate); // First sprint starts on config date
-  }
-  
-  // Add working days from start date
-  return addWorkingDays(configStartDate, totalWorkingDays);
-}
-
-function calculateSprintEnd(configStartDate, sprintIndex, workingDaysPerSprint) {
-  const totalWorkingDays = ((sprintIndex + 1) * workingDaysPerSprint) - 1;
-  return addWorkingDays(configStartDate, totalWorkingDays);
-}
-
-// ==================== WRITING TO SHEET ====================
-function writeSprintsToSheet(teamSheet, sprints) {
+// ==================== WRITE PERSON GROUPS TO SHEET ====================
+function writePersonGroupsToSheet(teamSheet, teamMembers) {
   let currentRow = 14;
   const teamName = teamSheet.getName().replace(' Team', '');
   
-  sprints.forEach(sprint => {
-    if (sprint.items.length === 0 || currentRow >= 61) return;
+  teamMembers.forEach(person => {
+    if (person.items.length === 0 || currentRow >= 61) return;
     
     // Calculate utilization
-    const utilization = Math.round((sprint.totalPoints / sprint.capacity) * 100);
+    const utilization = Math.round((person.totalPoints / person.capacity) * 100);
     const icon = utilization > 100 ? '🔥' : '✅';
     
-    // Sprint header
+    // Person header
     teamSheet.getRange(currentRow, 1, 1, 9).merge()
-      .setValue(`--- ${teamName.toUpperCase()} SPRINT ${sprint.number} (${sprint.totalPoints}/${sprint.capacity} pts - ${utilization}% ${icon}) ---`)
+      .setValue(`--- PERSON ${person.number} (${person.totalPoints}/${person.capacity} pts - ${utilization}% ${icon}) ---`)
       .setFontWeight('bold')
       .setBackground(PLANNING_CONFIG.COLORS.SPRINT_SEPARATOR)
       .setFontStyle('italic');
     currentRow++;
     
-    // Sort items within sprint by go-live date
-    sprint.items.sort((a, b) => {
-      const dateA = a.goLiveDate || new Date('2099-12-31');
-      const dateB = b.goLiveDate || new Date('2099-12-31');
-      return dateA - dateB;
-    });
+    // Sort items by start date
+    person.items.sort((a, b) => a.startDate - b.startDate);
     
     // Write items
-    sprint.items.forEach(item => {
+    person.items.forEach(item => {
       if (currentRow >= 61) return;
       
       teamSheet.getRange(currentRow, 1).setValue(item.origin);
@@ -477,13 +406,13 @@ function writeSprintsToSheet(teamSheet, sprints) {
       }
       
       teamSheet.getRange(currentRow, 6).setValue(item.source);
-      teamSheet.getRange(currentRow, 7).setValue(`Sprint ${sprint.number}`);
-      teamSheet.getRange(currentRow, 8).setValue(sprint.startDate).setNumberFormat('yyyy-MM-dd');
-      teamSheet.getRange(currentRow, 9).setValue(sprint.endDate).setNumberFormat('yyyy-MM-dd');
+      teamSheet.getRange(currentRow, 7).setValue(`Person ${person.number}`);
+      teamSheet.getRange(currentRow, 8).setValue(item.startDate).setNumberFormat('yyyy-MM-dd');
+      teamSheet.getRange(currentRow, 9).setValue(item.endDate).setNumberFormat('yyyy-MM-dd');
       
       // Color code
-      const sprintColor = getSprintColor(sprint.number);
-      teamSheet.getRange(currentRow, 7, 1, 3).setBackground(sprintColor);
+      const personColor = getPersonColor(person.number);
+      teamSheet.getRange(currentRow, 7, 1, 3).setBackground(personColor);
       
       currentRow++;
     });
@@ -498,74 +427,259 @@ function writeSprintsToSheet(teamSheet, sprints) {
   }
 }
 
-// ==================== WATERFALL PLANNING ====================
-function applyWaterfallPlanning() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+// ==================== ADD PERSON DROPDOWNS ====================
+function addPersonDropdowns(teamSheet, itemCount, teamSize) {
+  // Create list of person options
+  const personOptions = [];
+  for (let i = 1; i <= teamSize; i++) {
+    personOptions.push(`Person ${i}`);
+  }
   
-  if (!verifyPointsSystem()) {
-    SpreadsheetApp.getUi().alert('Points System not found.');
+  // Apply dropdowns to column G
+  let currentRow = 14;
+  let itemsProcessed = 0;
+  
+  while (currentRow <= 60 && itemsProcessed < itemCount * 1.5) {
+    const description = teamSheet.getRange(currentRow, 2).getValue();
+    
+    if (description && !description.toString().startsWith('---')) {
+      const validation = SpreadsheetApp.newDataValidation()
+        .requireValueInList(personOptions, true)
+        .setAllowInvalid(false)
+        .build();
+      
+      teamSheet.getRange(currentRow, 7).setDataValidation(validation);
+      itemsProcessed++;
+    }
+    currentRow++;
+  }
+}
+
+// ==================== REFRESH PLANNING DISPLAY ====================
+function refreshPlanningDisplay() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const teams = getTeamNames();
+  
+  if (teams.length === 0) {
+    SpreadsheetApp.getUi().alert('No team sheets found.');
     return;
   }
   
-  const configSheet = getOrCreatePlanningConfig();
-  let startDate = new Date(configSheet.getRange('B6').getValue());
-  startDate = getNextMonday(startDate);
-  
-  const teams = getTeamNames();
-  let successCount = 0;
+  let refreshCount = 0;
   
   teams.forEach(teamName => {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    const manifestItems = collectManifestItems(teamSheet);
+    // Check if planning exists
+    const assignmentCell = teamSheet.getRange(14, 7).getValue();
+    if (!assignmentCell) return;
     
-    if (manifestItems.length > 0) {
-      clearPlanningAreas(teamSheet);
-      addWaterfallHeaders(teamSheet);
-      applySequentialWaterfall(teamSheet, manifestItems, startDate);
-      successCount++;
+    // Determine if it's Sprint or Person based
+    const isSprint = assignmentCell.toString().includes('Sprint');
+    
+    // Collect all items with their current assignments
+    const items = [];
+    for (let row = 14; row <= 60; row++) {
+      const description = teamSheet.getRange(row, 2).getValue();
+      const assignment = teamSheet.getRange(row, 7).getValue();
+      
+      if (description && !description.toString().startsWith('---') && assignment) {
+        items.push({
+          row: row,
+          origin: teamSheet.getRange(row, 1).getValue(),
+          description: description,
+          size: teamSheet.getRange(row, 3).getValue(),
+          points: teamSheet.getRange(row, 4).getValue(),
+          goLiveDate: teamSheet.getRange(row, 5).getValue(),
+          source: teamSheet.getRange(row, 6).getValue(),
+          assignment: assignment,
+          startDate: teamSheet.getRange(row, 8).getValue(),
+          endDate: teamSheet.getRange(row, 9).getValue()
+        });
+      }
     }
+    
+    if (items.length === 0) return;
+    
+    // Group items by assignment
+    const groups = {};
+    items.forEach(item => {
+      if (!groups[item.assignment]) {
+        groups[item.assignment] = [];
+      }
+      groups[item.assignment].push(item);
+    });
+    
+    // Clear the display area but preserve dropdowns
+    for (let row = 14; row <= 60; row++) {
+      // Only clear columns 1-6, 8-9 (preserve column 7 dropdowns)
+      teamSheet.getRange(row, 1, 1, 6).clear();
+      teamSheet.getRange(row, 8, 1, 2).clear();
+    }
+    
+    // Rewrite organized by groups
+    let currentRow = 14;
+    
+    // Sort group keys
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+      // Extract numbers for proper sorting
+      const numA = parseInt(a.match(/\d+/)[0]);
+      const numB = parseInt(b.match(/\d+/)[0]);
+      return numA - numB;
+    });
+    
+    sortedKeys.forEach(groupKey => {
+      if (currentRow >= 61) return;
+      
+      const groupItems = groups[groupKey];
+      const totalPoints = groupItems.reduce((sum, item) => sum + parseFloat(item.points || 0), 0);
+      
+      // Estimate capacity (this is approximate since we don't store original capacities)
+      const netCapacity = teamSheet.getRange('D7').getValue() || 0;
+      const numGroups = sortedKeys.length;
+      const groupCapacity = Math.round(netCapacity / numGroups);
+      
+      const utilization = Math.round((totalPoints / groupCapacity) * 100);
+      const icon = utilization > 100 ? '🔥' : '✅';
+      
+      // Group header
+      const headerText = isSprint ? 
+        `--- ${teamName.toUpperCase()} ${groupKey.toUpperCase()} (${totalPoints}/${groupCapacity} pts - ${utilization}% ${icon}) ---` :
+        `--- ${groupKey.toUpperCase()} (${totalPoints}/${groupCapacity} pts - ${utilization}% ${icon}) ---`;
+      
+      teamSheet.getRange(currentRow, 1, 1, 9).merge()
+        .setValue(headerText)
+        .setFontWeight('bold')
+        .setBackground(PLANNING_CONFIG.COLORS.SPRINT_SEPARATOR)
+        .setFontStyle('italic');
+      currentRow++;
+      
+      // Sort items within group
+      groupItems.sort((a, b) => {
+        const dateA = a.goLiveDate || new Date('2099-12-31');
+        const dateB = b.goLiveDate || new Date('2099-12-31');
+        return dateA - dateB;
+      });
+      
+      // Write items
+      groupItems.forEach(item => {
+        if (currentRow >= 61) return;
+        
+        teamSheet.getRange(currentRow, 1).setValue(item.origin);
+        teamSheet.getRange(currentRow, 2).setValue(item.description);
+        teamSheet.getRange(currentRow, 3).setValue(item.size);
+        teamSheet.getRange(currentRow, 4).setValue(item.points).setNumberFormat('0');
+        
+        if (item.goLiveDate) {
+          teamSheet.getRange(currentRow, 5).setValue(item.goLiveDate);
+          if (item.goLiveDate instanceof Date) {
+            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
+          }
+        }
+        
+        teamSheet.getRange(currentRow, 6).setValue(item.source);
+        teamSheet.getRange(currentRow, 7).setValue(item.assignment);
+        
+        if (item.startDate) {
+          teamSheet.getRange(currentRow, 8).setValue(item.startDate).setNumberFormat('yyyy-MM-dd');
+        }
+        if (item.endDate) {
+          teamSheet.getRange(currentRow, 9).setValue(item.endDate).setNumberFormat('yyyy-MM-dd');
+        }
+        
+        // Color code
+        if (isSprint) {
+          const sprintNum = parseInt(item.assignment.match(/\d+/)[0]);
+          teamSheet.getRange(currentRow, 7, 1, 3).setBackground(getSprintColor(sprintNum));
+        } else {
+          const personNum = parseInt(item.assignment.match(/\d+/)[0]);
+          teamSheet.getRange(currentRow, 7, 1, 3).setBackground(getPersonColor(personNum));
+        }
+        
+        // Re-apply dropdown
+        const validation = teamSheet.getRange(currentRow, 7).getDataValidation();
+        if (validation) {
+          teamSheet.getRange(currentRow, 7).setDataValidation(validation);
+        }
+        
+        currentRow++;
+      });
+      
+      // Add spacing
+      if (currentRow < 60) currentRow++;
+    });
+    
+    refreshCount++;
   });
   
-  if (successCount > 0) {
-    SpreadsheetApp.getUi().alert('Waterfall Planning Applied', 
-      `Applied to ${successCount} team(s).`, 
+  if (refreshCount > 0) {
+    SpreadsheetApp.getUi().alert('Planning Refreshed', 
+      `Successfully reorganized ${refreshCount} team sheet(s) based on dropdown assignments.`, 
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    SpreadsheetApp.getUi().alert('No Planning Found', 
+      'No planning assignments found to refresh. Apply Sprint or Waterfall planning first.', 
       SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
 
-function applySequentialWaterfall(teamSheet, items, startDate) {
-  // Sort by go-live date
+// ==================== EXISTING SPRINT DISTRIBUTION (ENHANCED) ====================
+function distributeToSprints(teamSheet, items, teamNetCapacity, sprintDuration, firstSprintNumber, startDate) {
+  const workingDaysPerSprint = getWorkingDaysForDuration(sprintDuration);
+  const sprintCapacity = Math.round(teamNetCapacity * (workingDaysPerSprint / 20));
+  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
+  const sprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
+  
+  // Initialize sprints
+  const sprints = [];
+  for (let i = 0; i < sprintsNeeded; i++) {
+    const sprintNum = firstSprintNumber + i;
+    sprints.push({
+      number: sprintNum,
+      items: [],
+      totalPoints: 0,
+      capacity: sprintCapacity,
+      startDate: calculateSprintStart(startDate, i, workingDaysPerSprint),
+      endDate: calculateSprintEnd(startDate, i, workingDaysPerSprint)
+    });
+  }
+  
+  // Sort items by priority/date
   items.sort((a, b) => {
     const dateA = a.goLiveDate || new Date('2099-12-31');
     const dateB = b.goLiveDate || new Date('2099-12-31');
     return dateA - dateB;
   });
   
-  let currentDate = new Date(startDate);
-  
+  // Distribute items
   items.forEach(item => {
-    // Skip weekends
-    while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
+    // Find best sprint
+    let bestSprint = sprints[0];
+    let minLoad = Infinity;
     
-    item.startDate = new Date(currentDate);
-    const workingDays = Math.max(1, Math.round(item.points));
-    item.endDate = addWorkingDays(currentDate, workingDays - 1);
+    sprints.forEach(sprint => {
+      if (sprint.totalPoints < minLoad) {
+        bestSprint = sprint;
+        minLoad = sprint.totalPoints;
+      }
+    });
     
-    currentDate = addWorkingDays(item.endDate, 1);
+    bestSprint.items.push(item);
+    bestSprint.totalPoints += item.points;
   });
   
-  writeWaterfallToSheet(teamSheet, items);
+  // Balance sprints
+  rebalanceSprints(sprints, sprintCapacity);
+  
+  // Write to sheet
+  writeSprintsToSheet(teamSheet, sprints);
 }
 
 // ==================== HELPER FUNCTIONS ====================
 function collectManifestItems(teamSheet) {
   const items = [];
   
-  // Collect from rows 14-60 (workstream assignments)
   for (let row = 14; row <= 60; row++) {
     const description = teamSheet.getRange(row, 2).getValue();
     const points = teamSheet.getRange(row, 4).getValue();
@@ -587,6 +701,7 @@ function collectManifestItems(teamSheet) {
 
 function clearPlanningAreas(teamSheet) {
   teamSheet.getRange(14, 1, 47, 9).clear();
+  teamSheet.getRange(14, 1, 47, 9).clearDataValidations();
   teamSheet.getRange(14, 1, 47, 9).setBackground('#FFFFFF');
   teamSheet.getRange(13, 7, 1, 3).clear();
 }
@@ -599,46 +714,16 @@ function addSprintHeaders(teamSheet) {
 }
 
 function addWaterfallHeaders(teamSheet) {
-  teamSheet.getRange('G13').setValue('Phase').setFontWeight('bold').setBackground('#E1BEE7');
+  teamSheet.getRange('G13').setValue('Person').setFontWeight('bold').setBackground('#E1BEE7');
   teamSheet.getRange('H13').setValue('Start Date').setFontWeight('bold').setBackground('#E1BEE7');
   teamSheet.getRange('I13').setValue('End Date').setFontWeight('bold').setBackground('#E1BEE7');
   teamSheet.getRange(13, 1, 1, 9).setBorder(true, true, true, true, true, true);
 }
 
-function writeWaterfallToSheet(teamSheet, items) {
-  let currentRow = 14;
-  
-  items.forEach((item, index) => {
-    if (currentRow >= 61) return;
-    
-    teamSheet.getRange(currentRow, 1).setValue(item.origin);
-    teamSheet.getRange(currentRow, 2).setValue(item.description);
-    teamSheet.getRange(currentRow, 3).setValue(item.size);
-    teamSheet.getRange(currentRow, 4).setValue(item.points).setNumberFormat('0');
-    
-    if (item.goLiveDate) {
-      teamSheet.getRange(currentRow, 5).setValue(item.goLiveDate).setNumberFormat('yyyy-MM-dd');
-    }
-    
-    teamSheet.getRange(currentRow, 6).setValue(item.source);
-    teamSheet.getRange(currentRow, 7).setValue(`Phase ${index + 1}`);
-    teamSheet.getRange(currentRow, 8).setValue(item.startDate).setNumberFormat('yyyy-MM-dd');
-    teamSheet.getRange(currentRow, 9).setValue(item.endDate).setNumberFormat('yyyy-MM-dd');
-    
-    teamSheet.getRange(currentRow, 7, 1, 3).setBackground('#E3F2FD');
-    
-    currentRow++;
-  });
-  
-  if (currentRow > 14) {
-    teamSheet.getRange(14, 1, currentRow - 14, 9).setBorder(true, true, true, true, true, false);
-  }
-}
-
 function clearAllPlanning() {
   const ui = SpreadsheetApp.getUi();
   const response = ui.alert('Clear All Planning', 
-    'This will remove sprint/waterfall assignments. Continue?', 
+    'This will remove all sprint/person assignments. Continue?', 
     ui.ButtonSet.YES_NO);
   
   if (response !== ui.Button.YES) return;
@@ -676,6 +761,30 @@ function getTeamNames() {
   return teams;
 }
 
+function getWorkingDaysForDuration(duration) {
+  switch(duration) {
+    case '1 week': return 5;
+    case '2 weeks': return 10;
+    case '1 month': return 20;
+    default: return 10;
+  }
+}
+
+function calculateSprintStart(configStartDate, sprintIndex, workingDaysPerSprint) {
+  const totalWorkingDays = sprintIndex * workingDaysPerSprint;
+  
+  if (sprintIndex === 0) {
+    return new Date(configStartDate);
+  }
+  
+  return addWorkingDays(configStartDate, totalWorkingDays);
+}
+
+function calculateSprintEnd(configStartDate, sprintIndex, workingDaysPerSprint) {
+  const totalWorkingDays = ((sprintIndex + 1) * workingDaysPerSprint) - 1;
+  return addWorkingDays(configStartDate, totalWorkingDays);
+}
+
 function getSprintColor(sprintNumber) {
   const colors = [
     PLANNING_CONFIG.COLORS.SPRINT_1,
@@ -688,8 +797,138 @@ function getSprintColor(sprintNumber) {
   return colors[(sprintNumber - 1) % colors.length];
 }
 
+function getPersonColor(personNumber) {
+  const colors = [
+    PLANNING_CONFIG.COLORS.PERSON_1,
+    PLANNING_CONFIG.COLORS.PERSON_2,
+    PLANNING_CONFIG.COLORS.PERSON_3,
+    PLANNING_CONFIG.COLORS.PERSON_4,
+    PLANNING_CONFIG.COLORS.PERSON_5
+  ];
+  return colors[(personNumber - 1) % colors.length];
+}
+
 function openPlanningSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const configSheet = getOrCreatePlanningConfig();
   ss.setActiveSheet(configSheet);
+}
+
+// ==================== WRITE SPRINTS TO SHEET ====================
+function writeSprintsToSheet(teamSheet, sprints) {
+  let currentRow = 14;
+  const teamName = teamSheet.getName().replace(' Team', '');
+  
+  sprints.forEach(sprint => {
+    if (sprint.items.length === 0 || currentRow >= 61) return;
+    
+    const utilization = Math.round((sprint.totalPoints / sprint.capacity) * 100);
+    const icon = utilization > 100 ? '🔥' : '✅';
+    
+    teamSheet.getRange(currentRow, 1, 1, 9).merge()
+      .setValue(`--- ${teamName.toUpperCase()} SPRINT ${sprint.number} (${sprint.totalPoints}/${sprint.capacity} pts - ${utilization}% ${icon}) ---`)
+      .setFontWeight('bold')
+      .setBackground(PLANNING_CONFIG.COLORS.SPRINT_SEPARATOR)
+      .setFontStyle('italic');
+    currentRow++;
+    
+    sprint.items.sort((a, b) => {
+      const dateA = a.goLiveDate || new Date('2099-12-31');
+      const dateB = b.goLiveDate || new Date('2099-12-31');
+      return dateA - dateB;
+    });
+    
+    sprint.items.forEach(item => {
+      if (currentRow >= 61) return;
+      
+      teamSheet.getRange(currentRow, 1).setValue(item.origin);
+      teamSheet.getRange(currentRow, 2).setValue(item.description);
+      teamSheet.getRange(currentRow, 3).setValue(item.size);
+      teamSheet.getRange(currentRow, 4).setValue(item.points).setNumberFormat('0');
+      
+      if (item.goLiveDate) {
+        teamSheet.getRange(currentRow, 5).setValue(item.goLiveDate);
+        if (item.goLiveDate instanceof Date) {
+          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
+        }
+      }
+      
+      teamSheet.getRange(currentRow, 6).setValue(item.source);
+      teamSheet.getRange(currentRow, 7).setValue(`Sprint ${sprint.number}`);
+      teamSheet.getRange(currentRow, 8).setValue(sprint.startDate).setNumberFormat('yyyy-MM-dd');
+      teamSheet.getRange(currentRow, 9).setValue(sprint.endDate).setNumberFormat('yyyy-MM-dd');
+      
+      const sprintColor = getSprintColor(sprint.number);
+      teamSheet.getRange(currentRow, 7, 1, 3).setBackground(sprintColor);
+      
+      currentRow++;
+    });
+    
+    if (currentRow < 60) currentRow++;
+  });
+  
+  if (currentRow > 14) {
+    teamSheet.getRange(14, 1, currentRow - 14, 9).setBorder(true, true, true, true, true, false);
+  }
+}
+
+// ==================== REBALANCE SPRINTS ====================
+function rebalanceSprints(sprints, targetCapacity) {
+  const maxIterations = 20;
+  
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let moved = false;
+    
+    const avgLoad = sprints.reduce((sum, s) => sum + s.totalPoints, 0) / sprints.length;
+    
+    let maxDiff = 0;
+    let overloadedSprint = null;
+    let underloadedSprint = null;
+    
+    for (let i = 0; i < sprints.length; i++) {
+      for (let j = 0; j < sprints.length; j++) {
+        if (i === j) continue;
+        
+        const diff = sprints[i].totalPoints - sprints[j].totalPoints;
+        if (diff > maxDiff && diff > targetCapacity * 0.2) {
+          maxDiff = diff;
+          overloadedSprint = sprints[i];
+          underloadedSprint = sprints[j];
+        }
+      }
+    }
+    
+    if (!overloadedSprint || !underloadedSprint) break;
+    
+    overloadedSprint.items.sort((a, b) => a.points - b.points);
+    
+    for (let i = 0; i < overloadedSprint.items.length; i++) {
+      const item = overloadedSprint.items[i];
+      
+      const newOverloadedTotal = overloadedSprint.totalPoints - item.points;
+      const newUnderloadedTotal = underloadedSprint.totalPoints + item.points;
+      
+      const currentDiff = Math.abs(overloadedSprint.totalPoints - underloadedSprint.totalPoints);
+      const newDiff = Math.abs(newOverloadedTotal - newUnderloadedTotal);
+      
+      if (newDiff < currentDiff && newUnderloadedTotal <= targetCapacity * 1.1) {
+        let canMove = true;
+        if (underloadedSprint.number > overloadedSprint.number && 
+            item.goLiveDate && item.goLiveDate instanceof Date) {
+          canMove = underloadedSprint.endDate <= item.goLiveDate;
+        }
+        
+        if (canMove) {
+          overloadedSprint.items.splice(i, 1);
+          overloadedSprint.totalPoints = newOverloadedTotal;
+          underloadedSprint.items.push(item);
+          underloadedSprint.totalPoints = newUnderloadedTotal;
+          moved = true;
+          break;
+        }
+      }
+    }
+    
+    if (!moved) break;
+  }
 }
