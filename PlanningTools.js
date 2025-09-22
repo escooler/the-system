@@ -280,8 +280,6 @@ function applyWaterfallPlanning() {
   let startDate = new Date(configSheet.getRange('B6').getValue());
   startDate = getNextMonday(startDate);
   
-  const teamSize = parseInt(configSheet.getRange('B7').getValue()) || PLANNING_CONFIG.DEFAULT_TEAM_SIZE;
-  
   const teams = getTeamNames();
   let successCount = 0;
   
@@ -289,6 +287,8 @@ function applyWaterfallPlanning() {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
+    // Read team size from the team sheet itself (B4 = Team Members)
+    const teamSize = parseInt(teamSheet.getRange('B4').getValue()) || PLANNING_CONFIG.DEFAULT_TEAM_SIZE;
     const netCapacity = teamSheet.getRange('D7').getValue() || 0;
     const manifestItems = collectManifestItems(teamSheet);
     
@@ -308,7 +308,7 @@ function applyWaterfallPlanning() {
   
   if (successCount > 0) {
     SpreadsheetApp.getUi().alert('Waterfall Planning Applied', 
-      `Applied to ${successCount} team(s) with ${teamSize} team members each.\n\nYou can adjust assignments and click "Refresh Planning Display" to reorganize.`, 
+      `Applied to ${successCount} team(s) using each team's member count.\n\nYou can adjust assignments and click "Refresh Planning Display" to reorganize.`, 
       SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
@@ -466,17 +466,37 @@ function refreshPlanningDisplay() {
   }
   
   let refreshCount = 0;
+  let notFoundCount = 0;
   
   teams.forEach(teamName => {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    // Check if planning exists
-    const assignmentCell = teamSheet.getRange(14, 7).getValue();
-    if (!assignmentCell) return;
+    // More robust detection - look for any dropdown or assignment value in column G
+    let hasPlan = false;
+    let firstValidAssignment = null;
+    
+    // Check multiple rows for planning evidence
+    for (let checkRow = 14; checkRow <= 25; checkRow++) {
+      const dropdownCheck = teamSheet.getRange(checkRow, 7).getDataValidation();
+      const valueCheck = teamSheet.getRange(checkRow, 7).getValue();
+      
+      if (dropdownCheck || (valueCheck && (valueCheck.toString().includes('Sprint') || valueCheck.toString().includes('Person')))) {
+        hasPlan = true;
+        if (!firstValidAssignment && valueCheck) {
+          firstValidAssignment = valueCheck;
+        }
+        break;
+      }
+    }
+    
+    if (!hasPlan) {
+      notFoundCount++;
+      return;
+    }
     
     // Determine if it's Sprint or Person based
-    const isSprint = assignmentCell.toString().includes('Sprint');
+    const isSprint = firstValidAssignment && firstValidAssignment.toString().includes('Sprint');
     
     // Collect all items with their current assignments
     const items = [];
@@ -484,23 +504,37 @@ function refreshPlanningDisplay() {
       const description = teamSheet.getRange(row, 2).getValue();
       const assignment = teamSheet.getRange(row, 7).getValue();
       
-      if (description && !description.toString().startsWith('---') && assignment) {
+      // Skip empty rows and headers - be more flexible with header detection
+      if (description && 
+          !description.toString().includes('---') && 
+          !description.toString().includes('SPRINT') && 
+          !description.toString().includes('PERSON') &&
+          assignment && 
+          (assignment.toString().includes('Sprint') || assignment.toString().includes('Person'))) {
+        
+        // Store the current dropdown validation
+        const validation = teamSheet.getRange(row, 7).getDataValidation();
+        
         items.push({
           row: row,
-          origin: teamSheet.getRange(row, 1).getValue(),
+          origin: teamSheet.getRange(row, 1).getValue() || '',
           description: description,
-          size: teamSheet.getRange(row, 3).getValue(),
-          points: teamSheet.getRange(row, 4).getValue(),
+          size: teamSheet.getRange(row, 3).getValue() || '-',
+          points: parseFloat(teamSheet.getRange(row, 4).getValue()) || 0,
           goLiveDate: teamSheet.getRange(row, 5).getValue(),
-          source: teamSheet.getRange(row, 6).getValue(),
+          source: teamSheet.getRange(row, 6).getValue() || '',
           assignment: assignment,
           startDate: teamSheet.getRange(row, 8).getValue(),
-          endDate: teamSheet.getRange(row, 9).getValue()
+          endDate: teamSheet.getRange(row, 9).getValue(),
+          validation: validation  // Store the dropdown validation
         });
       }
     }
     
-    if (items.length === 0) return;
+    if (items.length === 0) {
+      notFoundCount++;
+      return;
+    }
     
     // Group items by assignment
     const groups = {};
@@ -511,12 +545,10 @@ function refreshPlanningDisplay() {
       groups[item.assignment].push(item);
     });
     
-    // Clear the display area but preserve dropdowns
-    for (let row = 14; row <= 60; row++) {
-      // Only clear columns 1-6, 8-9 (preserve column 7 dropdowns)
-      teamSheet.getRange(row, 1, 1, 6).clear();
-      teamSheet.getRange(row, 8, 1, 2).clear();
-    }
+    // Clear the entire manifest area (14-60) but preserve column headers
+    teamSheet.getRange(14, 1, 47, 9).clear();
+    teamSheet.getRange(14, 1, 47, 9).clearDataValidations();
+    teamSheet.getRange(14, 1, 47, 9).setBackground('#FFFFFF');
     
     // Rewrite organized by groups
     let currentRow = 14;
@@ -524,22 +556,32 @@ function refreshPlanningDisplay() {
     // Sort group keys
     const sortedKeys = Object.keys(groups).sort((a, b) => {
       // Extract numbers for proper sorting
-      const numA = parseInt(a.match(/\d+/)[0]);
-      const numB = parseInt(b.match(/\d+/)[0]);
+      const matchA = a.match(/\d+/);
+      const matchB = b.match(/\d+/);
+      const numA = matchA ? parseInt(matchA[0]) : 0;
+      const numB = matchB ? parseInt(matchB[0]) : 0;
       return numA - numB;
     });
+    
+    // Get team capacity info for calculations
+    const netCapacity = teamSheet.getRange('D7').getValue() || 100;
+    const teamMembers = teamSheet.getRange('B4').getValue() || 1;
+    
+    // Calculate capacity per group
+    let groupCapacity;
+    if (isSprint) {
+      // For sprints, divide by number of sprints
+      groupCapacity = Math.round(netCapacity / sortedKeys.length);
+    } else {
+      // For persons, divide by number of team members
+      groupCapacity = Math.round(netCapacity / teamMembers);
+    }
     
     sortedKeys.forEach(groupKey => {
       if (currentRow >= 61) return;
       
       const groupItems = groups[groupKey];
-      const totalPoints = groupItems.reduce((sum, item) => sum + parseFloat(item.points || 0), 0);
-      
-      // Estimate capacity (this is approximate since we don't store original capacities)
-      const netCapacity = teamSheet.getRange('D7').getValue() || 0;
-      const numGroups = sortedKeys.length;
-      const groupCapacity = Math.round(netCapacity / numGroups);
-      
+      const totalPoints = groupItems.reduce((sum, item) => sum + item.points, 0);
       const utilization = Math.round((totalPoints / groupCapacity) * 100);
       const icon = utilization > 100 ? '🔥' : '✅';
       
@@ -555,11 +597,15 @@ function refreshPlanningDisplay() {
         .setFontStyle('italic');
       currentRow++;
       
-      // Sort items within group
+      // Sort items within group by go-live date
       groupItems.sort((a, b) => {
         const dateA = a.goLiveDate || new Date('2099-12-31');
         const dateB = b.goLiveDate || new Date('2099-12-31');
-        return dateA - dateB;
+        
+        if (dateA instanceof Date && dateB instanceof Date) {
+          return dateA.getTime() - dateB.getTime();
+        }
+        return String(dateA).localeCompare(String(dateB));
       });
       
       // Write items
@@ -579,47 +625,70 @@ function refreshPlanningDisplay() {
         }
         
         teamSheet.getRange(currentRow, 6).setValue(item.source);
+        
+        // Restore the dropdown with the current assignment
+        if (item.validation) {
+          teamSheet.getRange(currentRow, 7).setDataValidation(item.validation);
+        }
         teamSheet.getRange(currentRow, 7).setValue(item.assignment);
         
+        // Keep existing dates if they exist
         if (item.startDate) {
-          teamSheet.getRange(currentRow, 8).setValue(item.startDate).setNumberFormat('yyyy-MM-dd');
+          teamSheet.getRange(currentRow, 8).setValue(item.startDate);
+          if (item.startDate instanceof Date) {
+            teamSheet.getRange(currentRow, 8).setNumberFormat('yyyy-MM-dd');
+          }
         }
         if (item.endDate) {
-          teamSheet.getRange(currentRow, 9).setValue(item.endDate).setNumberFormat('yyyy-MM-dd');
+          teamSheet.getRange(currentRow, 9).setValue(item.endDate);
+          if (item.endDate instanceof Date) {
+            teamSheet.getRange(currentRow, 9).setNumberFormat('yyyy-MM-dd');
+          }
         }
         
-        // Color code
+        // Color code based on assignment type
         if (isSprint) {
-          const sprintNum = parseInt(item.assignment.match(/\d+/)[0]);
+          const sprintMatch = item.assignment.match(/\d+/);
+          const sprintNum = sprintMatch ? parseInt(sprintMatch[0]) : 1;
           teamSheet.getRange(currentRow, 7, 1, 3).setBackground(getSprintColor(sprintNum));
         } else {
-          const personNum = parseInt(item.assignment.match(/\d+/)[0]);
+          const personMatch = item.assignment.match(/\d+/);
+          const personNum = personMatch ? parseInt(personMatch[0]) : 1;
           teamSheet.getRange(currentRow, 7, 1, 3).setBackground(getPersonColor(personNum));
-        }
-        
-        // Re-apply dropdown
-        const validation = teamSheet.getRange(currentRow, 7).getDataValidation();
-        if (validation) {
-          teamSheet.getRange(currentRow, 7).setDataValidation(validation);
         }
         
         currentRow++;
       });
       
-      // Add spacing
-      if (currentRow < 60) currentRow++;
+      // Add spacing between groups
+      if (currentRow < 60 && currentRow < 14 + items.length + sortedKeys.length * 2) {
+        currentRow++;
+      }
     });
+    
+    // Apply border to the populated area
+    if (currentRow > 14) {
+      teamSheet.getRange(14, 1, currentRow - 14, 9).setBorder(true, true, true, true, true, false);
+    }
     
     refreshCount++;
   });
   
+  // Provide appropriate feedback
   if (refreshCount > 0) {
     SpreadsheetApp.getUi().alert('Planning Refreshed', 
       `Successfully reorganized ${refreshCount} team sheet(s) based on dropdown assignments.`, 
       SpreadsheetApp.getUi().ButtonSet.OK);
-  } else {
+  } else if (notFoundCount > 0) {
     SpreadsheetApp.getUi().alert('No Planning Found', 
-      'No planning assignments found to refresh. Apply Sprint or Waterfall planning first.', 
+      'No valid planning assignments found to refresh. Make sure you have:\n\n' +
+      '1. Applied Sprint or Waterfall planning first\n' +
+      '2. Items have Sprint/Person assignments in column G\n\n' +
+      'Check team sheets and try again.', 
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    SpreadsheetApp.getUi().alert('No Team Sheets', 
+      'No team sheets found in the spreadsheet.', 
       SpreadsheetApp.getUi().ButtonSet.OK);
   }
 }
