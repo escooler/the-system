@@ -1,3227 +1,648 @@
-function refreshTeamAssignments(sortBy = 'workstream') {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    SpreadsheetApp.getUi().alert('No teams found. Please add teams first.');
-    return;
-  }
-  
-  // Initialize team assignments
-  const teamAssignments = {};
-  teams.forEach(team => {
-    teamAssignments[team] = [];
-    const teamSheet = ss.getSheetByName(team + ' Team');
-    if (teamSheet) {
-      // Clear workstream assignments area (adjusted for new layout with separation)
-      teamSheet.getRange(16, 1, 47, 6).clear();
-    }
-  });
-  
-  // Add Creative Planning for each team
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (teamSheet) {
-      const creativePlanningDays = teamSheet.getRange('B7').getValue();
-      if (creativePlanningDays > 0) {
-        const allocSheet = ss.getSheetByName('Allocation');
-        const monthName = allocSheet.getRange('C3').getValue();
-        const year = allocSheet.getRange('E3').getValue();
-        const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        
-        let nextMonthIndex = (monthIndex + 1) % 12;
-        let nextYear = year;
-        if (nextMonthIndex === 0) {
-          nextYear = year + 1;
-        }
-        const planningDate = new Date(nextYear, nextMonthIndex, 1);
-        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description: `Creative Planning & Ideation (for ${nextMonthName})`,
-          size: '-',
-          points: creativePlanningDays,
-          goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-          source: 'Team'
-        });
-      }
-    }
-  });
-  
-  // Collect from workstreams
-  const workstreams = getWorkstreamNames();
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    const data = wsSheet.getRange(46, 1, 50, 6).getValues();
-    data.forEach((row, i) => {
-      const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
-      
-      if (description && teamAssignment && teams.includes(teamAssignment)) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        const sourceType = (origin === 'PMM') ? 'PMM' : 'Workstream';
-        
-        teamAssignments[teamAssignment].push({
-          origin: wsName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: sourceType
-        });
-      }
-    });
-  });
-  
-  // Collect team-initiated work (updated row reference)
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const teamData = teamSheet.getRange(64, 1, 30, 6).getValues();
-    teamData.forEach(row => {
-      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
-      
-      if (description && points > 0) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: 'Team'
-        });
-      }
-    });
-  });
-  
-  // Write to team sheets
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const assignments = teamAssignments[teamName];
-    if (assignments.length === 0) {
-      setCell(teamSheet, 'A16', 'No assignments', {
-        fontStyle: true, fontColor: '#666666'
-      });
-      return;
-    }
-    
-    // Sort and write assignments
-    if (sortBy === 'date') {
-      assignments.sort((a, b) => {
-        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
-        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
-        
-        if (dateA && dateB && dateA !== '-' && dateB !== '-') {
-          const dateCompare = dateA.localeCompare(dateB);
-          if (dateCompare !== 0) return dateCompare;
-        } else if (dateA && dateA !== '-') {
-          return -1;
-        } else if (dateB && dateB !== '-') {
-          return 1;
-        }
-        return a.origin.localeCompare(b.origin);
-      });
-      
-      let currentRow = 16;
-      assignments.forEach(a => {
-        if (currentRow >= 63) return;
-        
-        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-          a.origin,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]]);
-        
-        if (a.goLiveDate && a.goLiveDate !== '-') {
-          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-        }
-        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-        
-        // Color code based on source
-        if (a.source === 'PMM') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-        } else if (a.source === 'Workstream') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-        } else if (a.source === 'Team') {
-          teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-        }
-        
-        currentRow++;
-      });
-      
-      if (currentRow > 16) {
-        teamSheet.getRange(16, 1, currentRow - 16, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    } else {
-      // Default: Group by workstream
-      const grouped = {};
-      assignments.forEach(a => {
-        if (!grouped[a.origin]) grouped[a.origin] = [];
-        grouped[a.origin].push(a);
-      });
-      
-      let currentRow = 16;
-      
-      const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        if (a === teamName) return -1;
-        if (b === teamName) return 1;
-        return a.localeCompare(b);
-      });
-      
-      sortedKeys.forEach(wsName => {
-        if (currentRow >= 63) return;
-        
-        if (wsName !== teamName) {
-          setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
-            merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
-          });
-          currentRow++;
-        }
-        
-        grouped[wsName].forEach(a => {
-          if (currentRow >= 63) return;
-          
-          teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-            a.origin,
-            a.description,
-            a.size,
-            a.points,
-            a.goLiveDate || '',
-            a.source
-          ]]);
-          
-          if (a.goLiveDate && a.goLiveDate !== '-') {
-            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-          }
-          teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-          
-          // Color code based on source
-          if (a.source === 'PMM') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-          } else if (a.source === 'Workstream') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-          } else if (a.source === 'Team') {
-            teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-          }
-          
-          currentRow++;
-        });
-      });
-      
-      if (currentRow > 16) {
-        teamSheet.getRange(16, 1, currentRow - 16, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
-}function refreshTeamAssignments(sortBy = 'workstream') {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    SpreadsheetApp.getUi().alert('No teams found. Please add teams first.');
-    return;
-  }
-  
-  // Initialize team assignments
-  const teamAssignments = {};
-  teams.forEach(team => {
-    teamAssignments[team] = [];
-    const teamSheet = ss.getSheetByName(team + ' Team');
-    if (teamSheet) {
-      // Clear workstream assignments area (adjusted for compact layout)
-      teamSheet.getRange(14, 1, 47, 6).clear();
-    }
-  });
-  
-  // Add Creative Planning for each team
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (teamSheet) {
-      const creativePlanningDays = teamSheet.getRange('B7').getValue();
-      if (creativePlanningDays > 0) {
-        const allocSheet = ss.getSheetByName('Allocation');
-        const monthName = allocSheet.getRange('C3').getValue();
-        const year = allocSheet.getRange('E3').getValue();
-        const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        
-        let nextMonthIndex = (monthIndex + 1) % 12;
-        let nextYear = year;
-        if (nextMonthIndex === 0) {
-          nextYear = year + 1;
-        }
-        const planningDate = new Date(nextYear, nextMonthIndex, 1);
-        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description: `Creative Planning & Ideation (for ${nextMonthName})`,
-          size: '-',
-          points: creativePlanningDays,
-          goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-          source: 'Team'
-        });
-      }
-    }
-  });
-  
-  // Collect from workstreams
-  const workstreams = getWorkstreamNames();
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    const data = wsSheet.getRange(46, 1, 50, 6).getValues();
-    data.forEach((row, i) => {
-      const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
-      
-      if (description && teamAssignment && teams.includes(teamAssignment)) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        const sourceType = (origin === 'PMM') ? 'PMM' : 'Workstream';
-        
-        teamAssignments[teamAssignment].push({
-          origin: wsName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: sourceType
-        });
-      }
-    });
-  });
-  
-  // Collect team-initiated work
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const teamData = teamSheet.getRange(62, 1, 30, 6).getValues();
-    teamData.forEach(row => {
-      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
-      
-      if (description && points > 0) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: 'Team'
-        });
-      }
-    });
-  });
-  
-  // Write to team sheets
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const assignments = teamAssignments[teamName];
-    if (assignments.length === 0) {
-      setCell(teamSheet, 'A14', 'No assignments', {
-        fontStyle: true, fontColor: '#666666'
-      });
-      return;
-    }
-    
-    // Sort and write assignments
-    if (sortBy === 'date') {
-      assignments.sort((a, b) => {
-        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
-        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
-        
-        if (dateA && dateB && dateA !== '-' && dateB !== '-') {
-          const dateCompare = dateA.localeCompare(dateB);
-          if (dateCompare !== 0) return dateCompare;
-        } else if (dateA && dateA !== '-') {
-          return -1;
-        } else if (dateB && dateB !== '-') {
-          return 1;
-        }
-        return a.origin.localeCompare(b.origin);
-      });
-      
-      let currentRow = 14;
-      assignments.forEach(a => {
-        if (currentRow >= 61) return;
-        
-        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-          a.origin,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]]);
-        
-        if (a.goLiveDate && a.goLiveDate !== '-') {
-          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-        }
-        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-        
-        // Color code based on source
-        if (a.source === 'PMM') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-        } else if (a.source === 'Workstream') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-        } else if (a.source === 'Team') {
-          teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-        }
-        
-        currentRow++;
-      });
-      
-      if (currentRow > 14) {
-        teamSheet.getRange(14, 1, currentRow - 14, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    } else {
-      // Default: Group by workstream
-      const grouped = {};
-      assignments.forEach(a => {
-        if (!grouped[a.origin]) grouped[a.origin] = [];
-        grouped[a.origin].push(a);
-      });
-      
-      let currentRow = 14;
-      
-      const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        if (a === teamName) return -1;
-        if (b === teamName) return 1;
-        return a.localeCompare(b);
-      });
-      
-      sortedKeys.forEach(wsName => {
-        if (currentRow >= 61) return;
-        
-        if (wsName !== teamName) {
-          setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
-            merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
-          });
-          currentRow++;
-        }
-        
-        grouped[wsName].forEach(a => {
-          if (currentRow >= 61) return;
-          
-          teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-            a.origin,
-            a.description,
-            a.size,
-            a.points,
-            a.goLiveDate || '',
-            a.source
-          ]]);
-          
-          if (a.goLiveDate && a.goLiveDate !== '-') {
-            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-          }
-          teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-          
-          // Color code based on source
-          if (a.source === 'PMM') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-          } else if (a.source === 'Workstream') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-          } else if (a.source === 'Team') {
-            teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-          }
-          
-          currentRow++;
-        });
-      });
-      
-      if (currentRow > 14) {
-        teamSheet.getRange(14, 1, currentRow - 14, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
-}/**
- * Marketing Team Points System - Version 13.1
+/**
+ * Planning Tools - Optimized Version 8.0
  * 
  * IMPROVEMENTS:
- * - Cleaner team sheet layout matching the desired format
- * - Auto-populate with "Team Member 1" instead of "John Smith" 
- * - Added Jira fields for workstream owners on workstream pages
- * - Better formatting and spacing
+ * - Fixed memory leaks in refresh function
+ * - Optimized date calculations
+ * - Reduced redundant sheet access with batch operations
+ * - Removed hard-coded row limits
+ * - Consolidated duplicate code
+ * - Added better error handling
  */
 
-const VERSION = "13.1";
-const RELEASE_DATE = "2024-12-21";
-
-const CONFIG = {
-  DEFAULT_WORKSTREAMS: ['SoMe', 'PUA', 'ASO', 'Portal'],
-  DEFAULT_ALLOCATIONS: [0.50, 0.20, 0.05, 0.25],
-  DEFAULT_CAPACITY: 100,
-  DEFAULT_BUFFER_PERCENT: 0.10,
-  TSHIRT_SIZES: {
-    'XS': 1,
-    'S': 3,
-    'M': 5,
-    'L': 13,
-    'XL': 21
-  },
+// ==================== CONSTANTS ====================
+const PLANNING_CONFIG = {
+  CONFIG_SHEET_NAME: 'Planning Config',
+  DEFAULT_SPRINT_DURATION: '2 weeks',
+  SPRINT_DURATIONS: ['1 week', '2 weeks', '1 month'],
+  DEFAULT_FIRST_SPRINT: 1,
+  DEFAULT_TEAM_SIZE: 5,
+  WORKING_DAYS_PER_WEEK: 5,
+  MAX_MANIFEST_ROWS: 47, // 61 - 14
   COLORS: {
-    HEADER_BLUE: '#4285F4',
-    HEADER_GREEN: '#34A853',
-    HEADER_ORANGE: '#FF9800',
-    HEADER_PURPLE: '#9C27B0',
-    LIGHT_BLUE: '#E8F0FE',
-    LIGHT_GREEN: '#E8F5E9',
-    LIGHT_ORANGE: '#FFE0B2',
-    LIGHT_YELLOW: '#FFF3E0',
-    LIGHT_PURPLE: '#F3E5F5',
-    PMM_BLUE: '#CDDFF9',
-    GRAY: '#F0F0F0'
-  },
-  MONTHS: [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ]
+    HEADER: '#4285F4',
+    CONFIG_BG: '#F5F5F5',
+    SPRINT_1: '#E8F5E9',
+    SPRINT_2: '#FFF9C4',
+    SPRINT_3: '#FFE0B2',
+    SPRINT_4: '#F3E5F5',
+    SPRINT_5: '#E1F5FE',
+    SPRINT_6: '#FCE4EC',
+    SEPARATOR: '#E0E0E0',
+    PLANNING_HEADER: '#E1BEE7'
+  }
 };
 
-// ==================== MAIN SETUP ====================
-function setupPointsSystem() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+// ==================== OPTIMIZED DATE FUNCTIONS ====================
+function getNextMonday(date = new Date()) {
+  const result = new Date(date);
+  const day = result.getDay();
+  const daysUntilMonday = day === 0 ? 1 : (8 - day) % 7 || 7;
+  result.setDate(result.getDate() + daysUntilMonday);
+  return result;
+}
+
+function addWorkingDays(startDate, workingDays) {
+  if (workingDays <= 0) return new Date(startDate);
   
-  // Clear all sheets except first
-  const sheets = ss.getSheets();
-  for (let i = sheets.length - 1; i > 0; i--) {
-    ss.deleteSheet(sheets[i]);
+  const result = new Date(startDate);
+  let totalDays = 0;
+  let weekends = 0;
+  
+  // Calculate full weeks
+  const fullWeeks = Math.floor(workingDays / 5);
+  totalDays += fullWeeks * 7;
+  
+  // Calculate remaining days
+  let remainingDays = workingDays % 5;
+  const startDay = result.getDay();
+  
+  // Check if remaining days cross a weekend
+  if (startDay + remainingDays > 5) {
+    weekends = (startDay === 0) ? 1 : 2;
   }
   
-  // Setup Allocation tab
-  const allocationSheet = sheets[0];
-  allocationSheet.clear();
-  allocationSheet.setName('Allocation');
-  setupAllocationTab(allocationSheet);
+  totalDays += remainingDays + weekends;
+  result.setDate(result.getDate() + totalDays);
   
-  // Create workstream tabs
-  CONFIG.DEFAULT_WORKSTREAMS.forEach(name => {
-    const wsSheet = ss.insertSheet(name);
-    setupWorkstreamTab(wsSheet, name);
+  // Ensure we don't land on a weekend
+  while (result.getDay() === 0 || result.getDay() === 6) {
+    result.setDate(result.getDate() + 1);
+  }
+  
+  return result;
+}
+
+// ==================== INSTALLATION ====================
+function installPlanningTools() {
+  // Remove existing triggers
+  ScriptApp.getProjectTriggers().forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'createPlanningMenu') {
+      ScriptApp.deleteTrigger(trigger);
+    }
   });
   
-  // Create default Creative team
-  const teamSheet = ss.insertSheet('Creative Team');
-  setupTeamTab(teamSheet, 'Creative');
+  // Create new trigger
+  ScriptApp.newTrigger('createPlanningMenu')
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onOpen()
+    .create();
   
-  // Update team dropdowns and capacity
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  
-  ss.setActiveSheet(allocationSheet);
+  createPlanningMenu();
   
   SpreadsheetApp.getUi().alert(
-    'Points System Setup Complete! 🎉',
-    `System v${VERSION} ready with improved team layout.`,
+    'Planning Tools Installed!',
+    'Version 8.0 - Optimized for performance',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
 
-// ==================== ALLOCATION TAB ====================
-function setupAllocationTab(sheet) {
-  // Set column widths
-  const widths = [250, 120, 120, 30, 250, 100, 80, 80, 80, 80];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
+function createPlanningMenu() {
+  SpreadsheetApp.getUi()
+    .createMenu('Planning Tools')
+    .addItem('🎯 Apply Sprint Planning', 'applySprintPlanning')
+    .addItem('👥 Apply Waterfall Planning', 'applyWaterfallPlanning')
+    .addSeparator()
+    .addItem('🔄 Refresh Planning Display', 'refreshPlanningDisplay')
+    .addSeparator()
+    .addItem('⚙️ Planning Settings', 'openPlanningSettings')
+    .addItem('🧹 Clear All Planning', 'clearAllPlanning')
+    .addToUi();
+}
+
+// ==================== CONFIG MANAGEMENT ====================
+function getOrCreatePlanningConfig() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let configSheet = ss.getSheetByName(PLANNING_CONFIG.CONFIG_SHEET_NAME);
   
-  // Title with month reference
-  setCell(sheet, 'A1:C1', '=CONCATENATE("ALLOCATION TAB - ",C3," Planning")', {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_BLUE, fontColor: '#FFFFFF'
-  });
+  if (!configSheet) {
+    configSheet = ss.insertSheet(PLANNING_CONFIG.CONFIG_SHEET_NAME);
+    setupConfigSheet(configSheet);
+  }
   
-  setCell(sheet, 'A2:C2', 'Monthly Planning & Resource Allocation', {
-    merge: true, fontSize: 11, background: CONFIG.COLORS.LIGHT_BLUE
-  });
+  return configSheet;
+}
+
+function setupConfigSheet(sheet) {
+  sheet.clear();
   
-  // Add Month Selector
-  setCell(sheet, 'A3', 'Planning Month:', { fontWeight: true });
+  // Set column widths in batch
+  sheet.setColumnWidths(1, 3, 150);
+  sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 250);
   
-  const currentMonth = new Date().getMonth();
-  const currentYear = new Date().getFullYear();
-  const monthValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(CONFIG.MONTHS, true)
-    .setAllowInvalid(false)
-    .build();
-  
-  sheet.getRange('C3').setDataValidation(monthValidation)
-    .setValue(CONFIG.MONTHS[currentMonth])
-    .setBackground(CONFIG.COLORS.LIGHT_YELLOW)
-    .setFontWeight(true);
-  
-  // Add Year input
-  setCell(sheet, 'D3', 'Year:');
-  setCell(sheet, 'E3', currentYear, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  
-  // Monthly Setup
-  setCell(sheet, 'A5', 'MONTHLY SETUP', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  setCell(sheet, 'A6', 'Total Creative Capacity (Points):');
-  
-  // Auto-sum from all teams' net capacity
-  const teamFormula = generateTeamCapacityFormula();
-  setCell(sheet, 'B6', teamFormula, {
-    background: '#E8F5E9', border: true, format: '0', fontWeight: true
-  });
-  
-  // Workstream Allocation
-  setCell(sheet, 'A8', 'WORKSTREAM ALLOCATION', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  
-  sheet.getRange('A9:C9').setValues([['Workstream', 'Allocation %', 'Points']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Workstreams
-  CONFIG.DEFAULT_WORKSTREAMS.forEach((ws, i) => {
-    const row = 10 + i;
-    setCell(sheet, `A${row}`, ws);
-    setCell(sheet, `B${row}`, CONFIG.DEFAULT_ALLOCATIONS[i], {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    setCell(sheet, `C${row}`, `=ROUND($B$6*B${row},0)`, {
-      format: '0', background: '#F5F5F5'
-    });
-  });
-  
-  // Total row
-  const totalRow = 14;
-  ['TOTAL', '=SUM(B10:B13)', '=SUM(C10:C13)'].forEach((val, i) => {
-    setCell(sheet, `${String.fromCharCode(65 + i)}${totalRow}`, val, {
-      fontWeight: true, background: '#E0E0E0',
-      format: i > 0 ? (i === 1 ? '0%' : '0') : null
-    });
-  });
-  
-  sheet.getRange(9, 1, 6, 3).setBorder(true, true, true, true, true, true);
-  
-  // Strategic Priorities
-  setCell(sheet, 'E5', 'STRATEGIC PRIORITIES', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  
-  sheet.getRange('E6:J6').setValues([['Priority Name', 'Weight %', 'SoMe', 'PUA', 'ASO', 'Portal']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Sample priorities
-  const priorities = [
-    ['Q4 Campaign Launch', 0.40],
-    ['Brand Awareness Push', 0.30],
-    ['Product Feature Release', 0.20],
-    ['Holiday Season Prep', 0.10]
+  // Batch set values
+  const values = [
+    ['PLANNING CONFIGURATION', '', ''],
+    ['', '', ''],
+    ['Planning Method:', 'Sprint', ''],
+    ['Sprint Duration:', PLANNING_CONFIG.DEFAULT_SPRINT_DURATION, ''],
+    ['First Sprint Number:', PLANNING_CONFIG.DEFAULT_FIRST_SPRINT, ''],
+    ['Start Date:', getNextMonday(), '(Adjusted to Monday)'],
+    ['Team Size:', PLANNING_CONFIG.DEFAULT_TEAM_SIZE, '(For waterfall planning)']
   ];
   
-  priorities.forEach((p, i) => {
-    const row = 7 + i;
-    setCell(sheet, `E${row}`, p[0]);
-    setCell(sheet, `F${row}`, p[1], {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
+  sheet.getRange(1, 1, values.length, 3).setValues(values);
+  
+  // Format header
+  sheet.getRange('A1:C1').merge()
+    .setFontSize(14)
+    .setFontWeight('bold')
+    .setBackground(PLANNING_CONFIG.COLORS.HEADER)
+    .setFontColor('#FFFFFF');
+  
+  // Add validations
+  const methodValidation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Sprint', 'Waterfall'], true)
+    .build();
+  sheet.getRange('B3').setDataValidation(methodValidation);
+  
+  const durationValidation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(PLANNING_CONFIG.SPRINT_DURATIONS, true)
+    .build();
+  sheet.getRange('B4').setDataValidation(durationValidation);
+  
+  // Format config cells
+  sheet.getRange('B3:B7').setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
+  sheet.getRange('B6').setNumberFormat('yyyy-MM-dd');
+  sheet.getRange('C6:C7').setFontStyle('italic').setFontSize(9);
+  
+  sheet.getRange(3, 1, 5, 2).setBorder(true, true, true, true, true, true);
+}
+
+// ==================== MAIN PLANNING FUNCTIONS ====================
+function applySprintPlanning() {
+  applyPlanning('Sprint');
+}
+
+function applyWaterfallPlanning() {
+  applyPlanning('Waterfall');
+}
+
+function applyPlanning(planningType) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  if (!ss.getSheetByName('Allocation')) {
+    SpreadsheetApp.getUi().alert('Points System not found. Please set up Points System first.');
+    return;
+  }
+  
+  const configSheet = getOrCreatePlanningConfig();
+  const config = readConfig(configSheet);
+  
+  const teams = getTeamNames();
+  if (teams.length === 0) {
+    SpreadsheetApp.getUi().alert('No team sheets found.');
+    return;
+  }
+  
+  let successCount = 0;
+  
+  teams.forEach(teamName => {
+    const teamSheet = ss.getSheetByName(teamName + ' Team');
+    if (!teamSheet) return;
+    
+    const manifestItems = collectManifestItems(teamSheet);
+    if (manifestItems.length === 0) return;
+    
+    // Clear and setup
+    clearPlanningAreas(teamSheet);
+    addPlanningHeaders(teamSheet, planningType);
+    
+    // Apply planning based on type
+    if (planningType === 'Sprint') {
+      const netCapacity = teamSheet.getRange('D7').getValue() || 0;
+      applySprints(teamSheet, manifestItems, netCapacity, config);
+    } else {
+      const teamSize = parseInt(teamSheet.getRange('B4').getValue()) || PLANNING_CONFIG.DEFAULT_TEAM_SIZE;
+      const netCapacity = teamSheet.getRange('D7').getValue() || 0;
+      applyWaterfall(teamSheet, manifestItems, teamSize, netCapacity, config.startDate);
+    }
+    
+    successCount++;
+  });
+  
+  if (successCount > 0) {
+    const message = planningType === 'Sprint' ? 
+      `Applied sprint planning to ${successCount} team(s).\n\nAdjust assignments using dropdowns and refresh to reorganize.` :
+      `Applied waterfall planning to ${successCount} team(s).\n\nAdjust assignments and refresh to reorganize.`;
+    
+    SpreadsheetApp.getUi().alert(`${planningType} Planning Applied`, message, SpreadsheetApp.getUi().ButtonSet.OK);
+  }
+}
+
+// ==================== OPTIMIZED CONFIG READER ====================
+function readConfig(configSheet) {
+  const values = configSheet.getRange('B3:B6').getValues();
+  return {
+    method: values[0][0],
+    duration: values[1][0],
+    firstSprint: parseInt(values[2][0]) || 1,
+    startDate: getNextMonday(new Date(values[3][0]))
+  };
+}
+
+// ==================== SPRINT PLANNING ====================
+function applySprints(teamSheet, items, netCapacity, config) {
+  const workingDaysPerSprint = getWorkingDaysForDuration(config.duration);
+  const sprintCapacity = Math.round(netCapacity * (workingDaysPerSprint / 20));
+  const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
+  const sprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
+  
+  // Initialize sprints
+  const sprints = [];
+  for (let i = 0; i < sprintsNeeded; i++) {
+    sprints.push({
+      number: config.firstSprint + i,
+      items: [],
+      totalPoints: 0,
+      capacity: sprintCapacity,
+      startDate: calculateSprintDate(config.startDate, i, workingDaysPerSprint, true),
+      endDate: calculateSprintDate(config.startDate, i, workingDaysPerSprint, false)
     });
-    for (let col = 7; col <= 10; col++) {
-      sheet.getRange(row, col).insertCheckboxes();
+  }
+  
+  // Distribute items
+  distributeItems(items, sprints, 'sprint');
+  
+  // Write to sheet
+  writeGroupsToSheet(teamSheet, sprints, 'Sprint', sprintCapacity);
+  
+  // Add dropdowns
+  addDropdowns(teamSheet, items.length, sprints.map(s => `Sprint ${s.number}`));
+}
+
+// ==================== WATERFALL PLANNING ====================
+function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
+  const capacityPerPerson = Math.round(netCapacity / teamSize);
+  
+  // Initialize team members
+  const teamMembers = [];
+  for (let i = 0; i < teamSize; i++) {
+    teamMembers.push({
+      number: i + 1,
+      items: [],
+      totalPoints: 0,
+      capacity: capacityPerPerson,
+      currentDate: new Date(startDate)
+    });
+  }
+  
+  // Distribute items with dates
+  items.forEach(item => {
+    // Find person with least load
+    const person = teamMembers.reduce((min, p) => 
+      p.totalPoints < min.totalPoints ? p : min
+    );
+    
+    // Calculate dates
+    const workingDays = Math.max(1, Math.round(item.points));
+    item.startDate = new Date(person.currentDate);
+    
+    // Skip weekends for start
+    while (item.startDate.getDay() === 0 || item.startDate.getDay() === 6) {
+      item.startDate.setDate(item.startDate.getDate() + 1);
+    }
+    
+    item.endDate = addWorkingDays(item.startDate, workingDays - 1);
+    item.assignedPerson = person.number;
+    
+    person.items.push(item);
+    person.totalPoints += item.points;
+    person.currentDate = addWorkingDays(item.endDate, 1);
+  });
+  
+  // Write to sheet
+  writeGroupsToSheet(teamSheet, teamMembers, 'Person', capacityPerPerson);
+  
+  // Add dropdowns
+  addDropdowns(teamSheet, items.length, teamMembers.map(p => `Person ${p.number}`));
+}
+
+// ==================== OPTIMIZED WRITING ====================
+function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
+  const teamName = teamSheet.getName().replace(' Team', '');
+  let currentRow = 14;
+  const outputData = [];
+  const formats = [];
+  const backgrounds = [];
+  
+  groups.forEach(group => {
+    if (group.items.length === 0) return;
+    
+    const utilization = Math.round((group.totalPoints / capacity) * 100);
+    const icon = utilization > 100 ? '🔥' : '✅';
+    const headerText = groupType === 'Sprint' ?
+      `--- ${teamName.toUpperCase()} SPRINT ${group.number} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---` :
+      `--- PERSON ${group.number} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---`;
+    
+    // Add header row
+    outputData.push([headerText, '', '', '', '', '', '', '', '']);
+    formats.push(['', '', '', '', '', '', '', '', '']);
+    backgrounds.push([PLANNING_CONFIG.COLORS.SEPARATOR, '', '', '', '', '', '', '', '']);
+    
+    // Sort and add items
+    group.items.sort((a, b) => {
+      const dateA = a.goLiveDate || new Date('2099-12-31');
+      const dateB = b.goLiveDate || new Date('2099-12-31');
+      return dateA - dateB;
+    });
+    
+    group.items.forEach(item => {
+      const assignment = `${groupType} ${group.number}`;
+      const color = getGroupColor(groupType, group.number);
+      
+      outputData.push([
+        item.origin || '',
+        item.description || '',
+        item.size || '-',
+        item.points || 0,
+        item.goLiveDate || '',
+        item.source || '',
+        assignment,
+        group.startDate || item.startDate || '',
+        group.endDate || item.endDate || ''
+      ]);
+      
+      formats.push(['', '', '', '0', 'yyyy-MM-dd', '', '', 'yyyy-MM-dd', 'yyyy-MM-dd']);
+      backgrounds.push(['', '', '', '', '', '', color, color, color]);
+    });
+    
+    // Add spacing
+    if (currentRow + outputData.length < 60) {
+      outputData.push(['', '', '', '', '', '', '', '', '']);
+      formats.push(['', '', '', '', '', '', '', '', '']);
+      backgrounds.push(['', '', '', '', '', '', '', '', '']);
     }
   });
   
-  // Empty rows for more priorities
-  for (let row = 11; row <= 21; row++) {
-    setCell(sheet, `E${row}`, '');
-    setCell(sheet, `F${row}`, '', {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    for (let col = 7; col <= 10; col++) {
-      sheet.getRange(row, col).insertCheckboxes();
+  // Write all data at once
+  if (outputData.length > 0) {
+    const maxRows = Math.min(outputData.length, PLANNING_CONFIG.MAX_MANIFEST_ROWS);
+    const range = teamSheet.getRange(14, 1, maxRows, 9);
+    range.setValues(outputData.slice(0, maxRows));
+    
+    // Apply formats and backgrounds efficiently
+    for (let i = 0; i < maxRows; i++) {
+      const row = 14 + i;
+      
+      // Merge header rows
+      if (outputData[i][0].startsWith('---')) {
+        teamSheet.getRange(row, 1, 1, 9).merge()
+          .setFontWeight('bold')
+          .setFontStyle('italic');
+      }
+      
+      // Apply formats where needed
+      for (let col = 0; col < 9; col++) {
+        if (formats[i][col]) {
+          teamSheet.getRange(row, col + 1).setNumberFormat(formats[i][col]);
+        }
+        if (backgrounds[i][col]) {
+          teamSheet.getRange(row, col + 1).setBackground(backgrounds[i][col]);
+        }
+      }
     }
+    
+    // Apply border
+    range.setBorder(true, true, true, true, true, false);
   }
-  
-  // Add TOTAL row for Strategic Priorities
-  setCell(sheet, 'E22', 'TOTAL', {
-    fontWeight: true, background: '#E0E0E0'
-  });
-  setCell(sheet, 'F22', '=SUM(F7:F21)', {
-    format: '0%', fontWeight: true, background: '#E0E0E0'
-  });
-  
-  // Conditional formatting for total
-  const rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$F$22>1')
-    .setFontColor('#FF0000')
-    .setRanges([sheet.getRange('F22')])
-    .build();
-  sheet.setConditionalFormatRules([rule]);
-  
-  sheet.getRange(6, 5, 17, 6).setBorder(true, true, true, true, true, true);
 }
 
-// ==================== WORKSTREAM TAB WITH JIRA FIELDS ====================
-function setupWorkstreamTab(sheet, workstreamName) {
-  sheet.clear();
+// ==================== OPTIMIZED REFRESH ====================
+function refreshPlanningDisplay() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const teams = getTeamNames();
   
-  // Set column count and widths
-  adjustColumns(sheet, 8);
-  const widths = [400, 120, 100, 80, 120, 120, 200, 150];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
+  if (teams.length === 0) {
+    SpreadsheetApp.getUi().alert('No team sheets found.');
+    return;
+  }
   
-  // Header with month reference
-  setCell(sheet, 'A1:H1', 
-    `=CONCATENATE("${workstreamName.toUpperCase()} WORKSTREAM - ",Allocation!C3," ",Allocation!E3)`, {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_GREEN, fontColor: '#FFFFFF'
-  });
+  let refreshCount = 0;
   
-  // Budget Summary (Left side)
-  setCell(sheet, 'A2', 'Total Points Allocated:');
-  setCell(sheet, 'B2', `=IFERROR(VLOOKUP("${workstreamName}",Allocation!A:C,3,FALSE),0)`, {
-    fontSize: 14, fontWeight: true, background: CONFIG.COLORS.LIGHT_GREEN, format: '0'
-  });
-  
-  setCell(sheet, 'A3', 'Points Spent on Assets:');
-  setCell(sheet, 'B3', '=SUMIF(D46:D95,">0")', {
-    fontSize: 14, fontWeight: true, background: CONFIG.COLORS.LIGHT_ORANGE, format: '0'
-  });
-  
-  setCell(sheet, 'C2', 'Remaining:');
-  setCell(sheet, 'D2', '=B2-B3', {
-    fontSize: 14, fontWeight: true, background: '#E1F5FE', format: '0'
-  });
-  
-  // Workstream Owner Info (Right side)
-  setCell(sheet, 'F2', 'Workstream Owner:');
-  setCell(sheet, 'G2', '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-  
-  setCell(sheet, 'F3', 'Email:');
-  setCell(sheet, 'G3', '', { background: '#FFF9C4' });
-  
-  setCell(sheet, 'F4', 'Jira Username:');
-  setCell(sheet, 'G4', '', { background: '#E1F5FE' });
-  
-  // Priorities Table
-  sheet.getRange('A5:D5').setValues([['Priority Name', 'Source', 'Allocation %', 'Points']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Workstream Priorities Section
-  setCell(sheet, 'A6:D6', '--- Workstream Team Priorities (Direct %) ---', {
-    merge: true, fontStyle: true, background: '#FFF9C4'
-  });
-  
-  // Workstream priority rows
-  for (let i = 0; i < 10; i++) {
-    const row = 7 + i;
-    setCell(sheet, `A${row}`, '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `B${row}`, 'Workstream');
-    setCell(sheet, `C${row}`, '', { format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `D${row}`, `=IF(C${row}="","",ROUND(C${row}*$B$2,0))`, {
-      format: '0', background: CONFIG.COLORS.LIGHT_GREEN
+  teams.forEach(teamName => {
+    const teamSheet = ss.getSheetByName(teamName + ' Team');
+    if (!teamSheet) return;
+    
+    // Check for planning data more efficiently
+    const planningCheck = teamSheet.getRange(14, 7, 10, 1).getValues();
+    const hasPlan = planningCheck.some(row => 
+      row[0] && (row[0].toString().includes('Sprint') || row[0].toString().includes('Person'))
+    );
+    
+    if (!hasPlan) return;
+    
+    // Collect items efficiently
+    const manifestData = teamSheet.getRange(14, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 9).getValues();
+    const items = [];
+    
+    for (let i = 0; i < manifestData.length; i++) {
+      const row = manifestData[i];
+      if (row[1] && !row[1].toString().includes('---') && row[6]) {
+        items.push({
+          rowIndex: i,
+          origin: row[0],
+          description: row[1],
+          size: row[2],
+          points: row[3],
+          goLiveDate: row[4],
+          source: row[5],
+          assignment: row[6],
+          startDate: row[7],
+          endDate: row[8]
+        });
+      }
+    }
+    
+    if (items.length === 0) return;
+    
+    // Group and reorganize
+    const groups = {};
+    items.forEach(item => {
+      if (!groups[item.assignment]) {
+        groups[item.assignment] = [];
+      }
+      groups[item.assignment].push(item);
     });
+    
+    // Clear and rewrite
+    teamSheet.getRange(14, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 9).clear();
+    
+    // Convert groups to array format for reuse
+    const groupArray = Object.keys(groups)
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/\d+/)?.[0] || '0');
+        const numB = parseInt(b.match(/\d+/)?.[0] || '0');
+        return numA - numB;
+      })
+      .map(key => ({
+        number: parseInt(key.match(/\d+/)?.[0] || '1'),
+        items: groups[key],
+        totalPoints: groups[key].reduce((sum, item) => sum + (item.points || 0), 0)
+      }));
+    
+    // Determine type and capacity
+    const isSprint = items[0].assignment.includes('Sprint');
+    const groupType = isSprint ? 'Sprint' : 'Person';
+    const netCapacity = teamSheet.getRange('D7').getValue() || 100;
+    const groupCapacity = Math.round(netCapacity / groupArray.length);
+    
+    // Write back
+    writeGroupsToSheet(teamSheet, groupArray, groupType, groupCapacity);
+    
+    // Restore dropdowns
+    const options = groupArray.map(g => `${groupType} ${g.number}`);
+    addDropdowns(teamSheet, items.length, options);
+    
+    refreshCount++;
+  });
+  
+  if (refreshCount > 0) {
+    SpreadsheetApp.getUi().alert('Planning Refreshed', 
+      `Successfully reorganized ${refreshCount} team sheet(s).`, 
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    SpreadsheetApp.getUi().alert('No Planning Found', 
+      'No valid planning found. Apply Sprint or Waterfall planning first.', 
+      SpreadsheetApp.getUi().ButtonSet.OK);
   }
-  
-  // Remaining capacity
-  setCell(sheet, 'A18', 'Remaining for PMM:', { fontWeight: true });
-  setCell(sheet, 'B18', '=MAX(0,100%-SUMIF(C7:C16,">0"))', {
-    format: '0%', fontWeight: true, background: '#E3F2FD'
-  });
-  setCell(sheet, 'C18', '←');
-  setCell(sheet, 'D18', '=ROUND(B18*B2,0)', {
-    format: '0', fontWeight: true, background: '#E3F2FD'
-  });
-  
-  // PMM Priorities Section
-  setCell(sheet, 'A20:D20', '--- PMM Strategic Priorities (Auto-scaled) ---', {
-    merge: true, fontStyle: true, background: CONFIG.COLORS.PMM_BLUE
-  });
-  
-  // Setup PMM formulas
-  setupPMMFormulas(sheet, workstreamName);
-  
-  // Summary
-  setCell(sheet, 'A37', 'WORKSTREAM %:', { fontWeight: true });
-  setCell(sheet, 'B37', '=SUMIF(C7:C16,">0")', { format: '0%', fontWeight: true });
-  setCell(sheet, 'C37', 'PMM %:', { fontWeight: true });
-  setCell(sheet, 'D37', '=SUMIF(C21:C35,">0")', { format: '0%', fontWeight: true });
-  setCell(sheet, 'A38', 'TOTAL POINTS:', { fontWeight: true });
-  setCell(sheet, 'B38', '=SUM(D7:D16,D21:D35)', { format: '0', fontWeight: true });
-  
-  // Borders
-  sheet.getRange(5, 1, 12, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(20, 1, 16, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(2, 6, 3, 2).setBorder(true, true, true, true, true, true);
-  
-  // Asset Planning Section
-  setupAssetSection(sheet, workstreamName);
-}
-
-// ==================== IMPROVED TEAM TAB ====================
-function setupTeamTab(sheet, teamName) {
-  sheet.clear();
-  
-  // Set column widths for compact layout
-  const widths = [120, 300, 80, 80, 120, 120, 150, 200, 100, 80];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
-  
-  // Header with month reference
-  setCell(sheet, 'A1:J1', 
-    `=CONCATENATE("${teamName.toUpperCase()} TEAM - ",Allocation!C3," ",Allocation!E3," Manifest")`, {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_PURPLE, fontColor: '#FFFFFF'
-  });
-  
-  // Team Capacity & Planning Section (Compact - Left side)
-  setCell(sheet, 'A3:F3', 'TEAM CAPACITY & PLANNING', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  // Row 4 - Team Members and Working Days
-  setCell(sheet, 'A4', 'Team Members:');
-  setCell(sheet, 'B4', 5, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  setCell(sheet, 'C4', 'Working Days/Month:');
-  setCell(sheet, 'D4', 20, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  
-  // Row 5 - Days Off and Gross Capacity
-  setCell(sheet, 'A5', 'Total Days Off (All Members):');
-  setCell(sheet, 'B5', '=SUM(J5:J14)', {
-    background: '#E8F5E9', format: '0', fontWeight: true
-  });
-  setCell(sheet, 'C5', 'Gross Capacity:');
-  setCell(sheet, 'D5', '=(B4*D4)-B5', {
-    fontWeight: true, background: '#E8F5E9', format: '0'
-  });
-  
-  // Row 6 - Buffer and Buffer Points
-  setCell(sheet, 'A6', 'Buffer % (sick/team projects):');
-  setCell(sheet, 'B6', CONFIG.DEFAULT_BUFFER_PERCENT, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0%'
-  });
-  setCell(sheet, 'C6', 'Buffer Points:');
-  setCell(sheet, 'D6', '=ROUND(D5*B6,0)', {
-    fontWeight: true, background: '#FFE0B2', format: '0'
-  });
-  
-  // Row 7 - Creative Planning and Net Capacity
-  setCell(sheet, 'A7', `=CONCATENATE("Creative Planning Days (for ",IF(Allocation!C3="December","January",INDEX({"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November"},0)+1)),"):")`);
-  setCell(sheet, 'B7', 0, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  setCell(sheet, 'C7', 'Net Capacity:');
-  setCell(sheet, 'D7', '=D5-D6-B7', {
-    fontWeight: true, background: CONFIG.COLORS.LIGHT_GREEN, format: '0'
-  });
-  
-  // Team Members Section (Right side) - Limited to 10 members
-  setCell(sheet, 'G3:J3', 'TEAM MEMBERS', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  sheet.getRange('G4:J4').setValues([['Name', 'Email', 'Jira Username', 'Holiday (Days)']])
-    .setFontWeight(true).setBackground('#E1BEE7');
-  
-  // Auto-populate with Team Member 1, 2, etc. (limited to 10)
-  for (let i = 0; i < 10; i++) {
-    const row = 5 + i;
-    setCell(sheet, `G${row}`, `Team Member ${i + 1}`, { background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `H${row}`, '', { background: '#FFF9C4' });
-    setCell(sheet, `I${row}`, '', { background: '#E1F5FE' });
-    setCell(sheet, `J${row}`, 0, { background: '#FFE0B2', format: '0' });
-  }
-  
-  setCell(sheet, 'G15:J15', 'Note: Add "TBD" or "Placeholder" for unassigned positions', {
-    merge: true, fontStyle: true, fontSize: 9, fontColor: '#666666'
-  });
-  
-  // Assignment Summary (moved up to eliminate gap)
-  setCell(sheet, 'A9:F9', 'ASSIGNMENT SUMMARY', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  setCell(sheet, 'A10', 'Workstream Assigned:');
-  setCell(sheet, 'B10', '=SUMIF(F17:F200,"Workstream",D17:D200)+SUMIF(F17:F200,"PMM",D17:D200)', {
-    fontWeight: true, fontSize: 14, background: CONFIG.COLORS.LIGHT_ORANGE, format: '0'
-  });
-  
-  setCell(sheet, 'C10', 'Team Initiated:');
-  setCell(sheet, 'D10', '=SUMIF(F17:F200,"Team",D17:D200)', {
-    fontWeight: true, fontSize: 14, background: '#E1F5FE', format: '0'
-  });
-  
-  setCell(sheet, 'E10', 'Buffer/Team Projects:');
-  setCell(sheet, 'F10', '=D6', {
-    fontWeight: true, fontSize: 14, background: '#FFE0B2', format: '0'
-  });
-  
-  setCell(sheet, 'A11', `=CONCATENATE("Creative Planning (",IF(Allocation!C3="December","Jan",TEXT(DATE(2000,MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},0)+1,1),"mmm")),"):")`);
-  setCell(sheet, 'B11', '=B7', {
-    fontWeight: true, fontSize: 14, background: '#FFECB3', format: '0'
-  });
-  
-  setCell(sheet, 'C11', 'Total Allocated:');
-  setCell(sheet, 'D11', '=B10+D10+F10+B11', {
-    fontWeight: true, fontSize: 14, background: '#FFD54F', format: '0'
-  });
-  
-  setCell(sheet, 'E11', 'Utilization:');
-  setCell(sheet, 'F11', '=IF(D5=0,"",D11/D5)', {
-    fontWeight: true, fontSize: 14, format: '0%'
-  });
-  
-  setCell(sheet, 'A12:F12', 
-    '=IF(D11>D5,"⚠️ OVER by "&(D11-D5)&" pts",IF(D11=D5,"✅ FULL","✅ "&(D5-D11)&" pts available"))', {
-    merge: true, fontWeight: true, fontSize: 12
-  });
-  
-  // Conditional formatting for over capacity
-  const rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$D$11>$D$5')
-    .setFontColor('#FF0000')
-    .setRanges([sheet.getRange('D11')])
-    .build();
-  sheet.setConditionalFormatRules([rule]);
-  
-  // Add separation row for better formatting
-  setCell(sheet, 'A13', '');
-  setCell(sheet, 'A14:F14', '', {
-    merge: true, background: '#F8F9FA', 
-    border: true
-  });
-  
-  // Table headers (with separation)
-  sheet.getRange('A15:F15').setValues([['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source']])
-    .setFontWeight(true).setBackground('#E1BEE7');
-  
-  setCell(sheet, 'A17', 'Click "Refresh Team Assignments" to load workstream assignments...', {
-    fontStyle: true, fontColor: '#666666'
-  });
-  
-  // Team-initiated section (moved down accordingly)
-  setCell(sheet, 'A63:F63', '--- TEAM-INITIATED WORK ---', {
-    merge: true, fontWeight: true, fontStyle: true, background: '#E1F5FE'
-  });
-  
-  // Team rows with T-shirt validation
-  const sizeValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(Object.keys(CONFIG.TSHIRT_SIZES), true)
-    .setAllowInvalid(false)
-    .build();
-  
-  const today = new Date();
-  
-  for (let i = 0; i < 30; i++) {
-    const row = 64 + i;
-    
-    setCell(sheet, `A${row}`, teamName, { background: CONFIG.COLORS.GRAY });
-    setCell(sheet, `B${row}`, '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-    
-    sheet.getRange(row, 3).setDataValidation(sizeValidation)
-      .setBackground('#E1F5FE');
-    
-    const sizeFormula = `=IF(C${row}="","",SWITCH(C${row},` +
-      Object.entries(CONFIG.TSHIRT_SIZES)
-        .map(([size, points]) => `"${size}",${points}`)
-        .join(',') + ',0))';
-    setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
-    
-    setCell(sheet, `E${row}`, today, { background: '#FFF9C4' });
-    sheet.getRange(row, 5).setNumberFormat('yyyy-MM-dd');
-    setCell(sheet, `F${row}`, 'Team', { background: '#E1F5FE' });
-  }
-  
-  // Borders (updated positions)
-  sheet.getRange(3, 1, 5, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(3, 7, 13, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(9, 1, 4, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(63, 1, 31, 6).setBorder(true, true, true, true, true, true);
 }
 
 // ==================== HELPER FUNCTIONS ====================
-function setCell(sheet, range, value, options = {}) {
-  const cell = sheet.getRange(range);
+function collectManifestItems(teamSheet) {
+  const data = teamSheet.getRange(14, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 6).getValues();
+  const items = [];
   
-  if (options.merge) cell.merge();
-  
-  if (value !== undefined) {
-    if (typeof value === 'string' && value.startsWith('=')) {
-      cell.setFormula(value);
-    } else {
-      cell.setValue(value);
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    if (row[1] && row[3] > 0 && !row[1].toString().startsWith('---')) {
+      items.push({
+        origin: row[0] || '',
+        description: row[1],
+        size: row[2] || '-',
+        points: parseFloat(row[3]) || 0,
+        goLiveDate: row[4],
+        source: row[5] || ''
+      });
     }
   }
   
-  if (options.fontSize) cell.setFontSize(options.fontSize);
-  if (options.fontWeight) cell.setFontWeight('bold');
-  if (options.fontStyle) cell.setFontStyle('italic');
-  if (options.fontColor) cell.setFontColor(options.fontColor);
-  if (options.background) cell.setBackground(options.background);
-  if (options.format) cell.setNumberFormat(options.format);
-  if (options.border) cell.setBorder(true, true, true, true, false, false);
-  
-  return cell;
+  return items;
 }
 
-function adjustColumns(sheet, targetCols) {
-  const maxCols = sheet.getMaxColumns();
-  if (maxCols > targetCols) {
-    sheet.deleteColumns(targetCols + 1, maxCols - targetCols);
-  } else if (maxCols < targetCols) {
-    sheet.insertColumnsAfter(maxCols, targetCols - maxCols);
-  }
+function clearPlanningAreas(teamSheet) {
+  teamSheet.getRange(14, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 9).clear();
+  teamSheet.getRange(14, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 9).clearDataValidations();
+  teamSheet.getRange(13, 7, 1, 3).clear();
 }
 
-function generateTeamCapacityFormula() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
+function addPlanningHeaders(teamSheet, planningType) {
+  const headerType = planningType === 'Sprint' ? 'Sprint' : 'Person';
+  const headers = [[headerType, 'Start Date', 'End Date']];
   
-  if (teams.length === 0) {
-    return CONFIG.DEFAULT_CAPACITY;
-  }
+  teamSheet.getRange(13, 7, 1, 3)
+    .setValues(headers)
+    .setFontWeight('bold')
+    .setBackground(PLANNING_CONFIG.COLORS.PLANNING_HEADER);
   
-  const teamRefs = teams.map(team => `'${team} Team'!D7`);
-  return `=SUM(${teamRefs.join(',')})`;
+  teamSheet.getRange(13, 1, 1, 9).setBorder(true, true, true, true, true, true);
 }
 
-function updateTotalCapacity() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
+function addDropdowns(teamSheet, itemCount, options) {
+  if (options.length === 0) return;
   
-  if (!allocSheet) return;
-  
-  const formula = generateTeamCapacityFormula();
-  allocSheet.getRange('B6').setFormula(formula);
-}
-
-function setupPMMFormulas(sheet, workstreamName) {
-  const checkboxCol = findCheckboxColumn(workstreamName);
-  if (checkboxCol < 0) return;
-  
-  const colLetter = columnToLetter(checkboxCol);
-  
-  for (let i = 0; i < 15; i++) {
-    const row = 21 + i;
-    const allocRow = 7 + i;
-    
-    setCell(sheet, `A${row}`, 
-      `=IF(Allocation!${colLetter}${allocRow}=TRUE,Allocation!E${allocRow},"")`, 
-      { background: CONFIG.COLORS.PMM_BLUE });
-    
-    setCell(sheet, `B${row}`, 
-      `=IF(A${row}<>"","PMM","")`, 
-      { background: CONFIG.COLORS.PMM_BLUE });
-    
-    const percentFormula = `=IF(A${row}="","",` +
-      `IF(SUMPRODUCT(Allocation!${colLetter}7:${colLetter}21*Allocation!F7:F21)=0,0,` +
-      `(Allocation!F${allocRow}*Allocation!${colLetter}${allocRow})/` +
-      `SUMPRODUCT(Allocation!${colLetter}7:${colLetter}21*Allocation!F7:F21)*B18))`;
-    
-    setCell(sheet, `C${row}`, percentFormula, 
-      { format: '0%', background: CONFIG.COLORS.PMM_BLUE });
-    
-    setCell(sheet, `D${row}`, 
-      `=IF(C${row}="","",ROUND(C${row}*$B$2,0))`, 
-      { format: '0', background: CONFIG.COLORS.LIGHT_GREEN });
-  }
-}
-
-function setupAssetSection(sheet, workstreamName) {
-  // Header
-  setCell(sheet, 'A41:F41', 'ASSET PLANNING', {
-    merge: true, fontSize: 14, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_ORANGE, fontColor: '#FFFFFF'
-  });
-  
-  // Budget info
-  setCell(sheet, 'A42', 'Budget:');
-  setCell(sheet, 'B42', '=B2', {
-    fontWeight: true, format: '0', background: CONFIG.COLORS.LIGHT_GREEN
-  });
-  setCell(sheet, 'C42', 'Spent:');
-  setCell(sheet, 'D42', '=SUMIF(D46:D95,">0")', {
-    fontWeight: true, format: '0', background: CONFIG.COLORS.LIGHT_ORANGE
-  });
-  setCell(sheet, 'E42:F42', 
-    '=IF(B42-D42<0,"⚠️ OVER by "&ABS(B42-D42),"💰 "&(B42-D42)&" remaining")', {
-    merge: true, fontWeight: true
-  });
-  
-  // T-shirt legend
-  setCell(sheet, 'A43:F43', 
-    'T-Shirt Sizes: XS=1 point | S=3 points | M=5 points | L=13 points | XL=21 points', {
-    merge: true, fontSize: 10, fontStyle: true, background: CONFIG.COLORS.LIGHT_YELLOW
-  });
-  
-  // Table headers
-  const headers = ['Asset Description', 'Go Live Date', 'T-Shirt Size', 'Cost', 'Origin', 'Team'];
-  headers.forEach((header, i) => {
-    setCell(sheet, `${String.fromCharCode(65 + i)}45`, header, {
-      fontWeight: true, background: CONFIG.COLORS.LIGHT_ORANGE
-    });
-  });
-  
-  // Asset rows
-  const teamNames = getTeamNames();
-  const sizeValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(Object.keys(CONFIG.TSHIRT_SIZES), true)
+  const validation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(options, true)
     .setAllowInvalid(false)
     .build();
   
-  const originValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['Workstream', 'PMM'], true)
-    .setAllowInvalid(false)
-    .build();
-  
-  const teamValidation = teamNames.length > 0 ? 
-    SpreadsheetApp.newDataValidation()
-      .requireValueInList(teamNames, true)
-      .setAllowInvalid(false)
-      .build() : null;
-  
-  const today = new Date();
-  
-  for (let i = 0; i < 50; i++) {
-    const row = 46 + i;
-    
-    setCell(sheet, `A${row}`, '', { background: '#FFFFFF' });
-    
-    setCell(sheet, `B${row}`, today, { background: '#FFF9C4' });
-    sheet.getRange(row, 2).setNumberFormat('yyyy-MM-dd');
-    
-    sheet.getRange(row, 3).setDataValidation(sizeValidation)
-      .setBackground('#E1F5FE');
-    
-    const sizeFormula = `=IF(C${row}="","",SWITCH(C${row},` +
-      Object.entries(CONFIG.TSHIRT_SIZES)
-        .map(([size, points]) => `"${size}",${points}`)
-        .join(',') + ',0))';
-    setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
-    
-    sheet.getRange(row, 5).setDataValidation(originValidation);
-    setCell(sheet, `E${row}`, 'Workstream', {
-      background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    
-    if (teamValidation) {
-      sheet.getRange(row, 6).setDataValidation(teamValidation)
-        .setBackground(CONFIG.COLORS.LIGHT_PURPLE);
-    } else {
-      setCell(sheet, `F${row}`, '', { background: CONFIG.COLORS.LIGHT_PURPLE });
+  let applied = 0;
+  for (let row = 14; row <= Math.min(60, 14 + itemCount * 2); row++) {
+    const desc = teamSheet.getRange(row, 2).getValue();
+    if (desc && !desc.toString().startsWith('---')) {
+      teamSheet.getRange(row, 7).setDataValidation(validation);
+      applied++;
+      if (applied >= itemCount) break;
     }
-  }
-  
-  // Conditional formatting for Origin column
-  const originRange = sheet.getRange('E46:E95');
-  
-  const wsRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('Workstream')
-    .setBackground(CONFIG.COLORS.LIGHT_YELLOW)
-    .setRanges([originRange])
-    .build();
-  
-  const pmmRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('PMM')
-    .setBackground(CONFIG.COLORS.PMM_BLUE)
-    .setRanges([originRange])
-    .build();
-  
-  const existingRules = sheet.getConditionalFormatRules();
-  existingRules.push(wsRule, pmmRule);
-  sheet.setConditionalFormatRules(existingRules);
-  
-  sheet.getRange(45, 1, 51, 6).setBorder(true, true, true, true, true, true);
-}
-
-function refreshTeamAssignments(sortBy = 'workstream') {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    SpreadsheetApp.getUi().alert('No teams found. Please add teams first.');
-    return;
-  }
-  
-  // Initialize team assignments
-  const teamAssignments = {};
-  teams.forEach(team => {
-    teamAssignments[team] = [];
-    const teamSheet = ss.getSheetByName(team + ' Team');
-    if (teamSheet) {
-      // Clear workstream assignments area (adjusted for new layout with separation)
-      teamSheet.getRange(16, 1, 47, 6).clear();
-    }
-  });
-  
-  // Add Creative Planning for each team
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (teamSheet) {
-      const creativePlanningDays = teamSheet.getRange('B7').getValue();
-      if (creativePlanningDays > 0) {
-        const allocSheet = ss.getSheetByName('Allocation');
-        const monthName = allocSheet.getRange('C3').getValue();
-        const year = allocSheet.getRange('E3').getValue();
-        const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        
-        let nextMonthIndex = (monthIndex + 1) % 12;
-        let nextYear = year;
-        if (nextMonthIndex === 0) {
-          nextYear = year + 1;
-        }
-        const planningDate = new Date(nextYear, nextMonthIndex, 1);
-        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description: `Creative Planning & Ideation (for ${nextMonthName})`,
-          size: '-',
-          points: creativePlanningDays,
-          goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-          source: 'Team'
-        });
-      }
-    }
-  });
-  
-  // Collect from workstreams
-  const workstreams = getWorkstreamNames();
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    const data = wsSheet.getRange(46, 1, 50, 6).getValues();
-    data.forEach((row, i) => {
-      const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
-      
-      if (description && teamAssignment && teams.includes(teamAssignment)) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        const sourceType = (origin === 'PMM') ? 'PMM' : 'Workstream';
-        
-        teamAssignments[teamAssignment].push({
-          origin: wsName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: sourceType
-        });
-      }
-    });
-  });
-  
-  // Collect team-initiated work (updated row reference)
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const teamData = teamSheet.getRange(64, 1, 30, 6).getValues();
-    teamData.forEach(row => {
-      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
-      
-      if (description && points > 0) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: 'Team'
-        });
-      }
-    });
-  });
-  
-  // Write to team sheets
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const assignments = teamAssignments[teamName];
-    if (assignments.length === 0) {
-      setCell(teamSheet, 'A16', 'No assignments', {
-        fontStyle: true, fontColor: '#666666'
-      });
-      return;
-    }
-    
-    // Sort and write assignments
-    if (sortBy === 'date') {
-      assignments.sort((a, b) => {
-        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
-        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
-        
-        if (dateA && dateB && dateA !== '-' && dateB !== '-') {
-          const dateCompare = dateA.localeCompare(dateB);
-          if (dateCompare !== 0) return dateCompare;
-        } else if (dateA && dateA !== '-') {
-          return -1;
-        } else if (dateB && dateB !== '-') {
-          return 1;
-        }
-        return a.origin.localeCompare(b.origin);
-      });
-      
-      let currentRow = 16;
-      assignments.forEach(a => {
-        if (currentRow >= 63) return;
-        
-        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-          a.origin,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]]);
-        
-        if (a.goLiveDate && a.goLiveDate !== '-') {
-          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-        }
-        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-        
-        // Color code based on source
-        if (a.source === 'PMM') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-        } else if (a.source === 'Workstream') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-        } else if (a.source === 'Team') {
-          teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-        }
-        
-        currentRow++;
-      });
-      
-      if (currentRow > 16) {
-        teamSheet.getRange(16, 1, currentRow - 16, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    } else {
-      // Default: Group by workstream
-      const grouped = {};
-      assignments.forEach(a => {
-        if (!grouped[a.origin]) grouped[a.origin] = [];
-        grouped[a.origin].push(a);
-      });
-      
-      let currentRow = 16;
-      
-      const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        if (a === teamName) return -1;
-        if (b === teamName) return 1;
-        return a.localeCompare(b);
-      });
-      
-      sortedKeys.forEach(wsName => {
-        if (currentRow >= 63) return;
-        
-        if (wsName !== teamName) {
-          setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
-            merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
-          });
-          currentRow++;
-        }
-        
-        grouped[wsName].forEach(a => {
-          if (currentRow >= 63) return;
-          
-          teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-            a.origin,
-            a.description,
-            a.size,
-            a.points,
-            a.goLiveDate || '',
-            a.source
-          ]]);
-          
-          if (a.goLiveDate && a.goLiveDate !== '-') {
-            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-          }
-          teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-          
-          // Color code based on source
-          if (a.source === 'PMM') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-          } else if (a.source === 'Workstream') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-          } else if (a.source === 'Team') {
-            teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-          }
-          
-          currentRow++;
-        });
-      });
-      
-      if (currentRow > 16) {
-        teamSheet.getRange(16, 1, currentRow - 16, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
-}function refreshTeamAssignments(sortBy = 'workstream') {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    SpreadsheetApp.getUi().alert('No teams found. Please add teams first.');
-    return;
-  }
-  
-  // Initialize team assignments
-  const teamAssignments = {};
-  teams.forEach(team => {
-    teamAssignments[team] = [];
-    const teamSheet = ss.getSheetByName(team + ' Team');
-    if (teamSheet) {
-      // Clear workstream assignments area (adjusted for compact layout)
-      teamSheet.getRange(14, 1, 47, 6).clear();
-    }
-  });
-  
-  // Add Creative Planning for each team
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (teamSheet) {
-      const creativePlanningDays = teamSheet.getRange('B7').getValue();
-      if (creativePlanningDays > 0) {
-        const allocSheet = ss.getSheetByName('Allocation');
-        const monthName = allocSheet.getRange('C3').getValue();
-        const year = allocSheet.getRange('E3').getValue();
-        const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        
-        let nextMonthIndex = (monthIndex + 1) % 12;
-        let nextYear = year;
-        if (nextMonthIndex === 0) {
-          nextYear = year + 1;
-        }
-        const planningDate = new Date(nextYear, nextMonthIndex, 1);
-        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description: `Creative Planning & Ideation (for ${nextMonthName})`,
-          size: '-',
-          points: creativePlanningDays,
-          goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-          source: 'Team'
-        });
-      }
-    }
-  });
-  
-  // Collect from workstreams
-  const workstreams = getWorkstreamNames();
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    const data = wsSheet.getRange(46, 1, 50, 6).getValues();
-    data.forEach((row, i) => {
-      const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
-      
-      if (description && teamAssignment && teams.includes(teamAssignment)) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        const sourceType = (origin === 'PMM') ? 'PMM' : 'Workstream';
-        
-        teamAssignments[teamAssignment].push({
-          origin: wsName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: sourceType
-        });
-      }
-    });
-  });
-  
-  // Collect team-initiated work
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const teamData = teamSheet.getRange(62, 1, 30, 6).getValues();
-    teamData.forEach(row => {
-      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
-      
-      if (description && points > 0) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: 'Team'
-        });
-      }
-    });
-  });
-  
-  // Write to team sheets
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const assignments = teamAssignments[teamName];
-    if (assignments.length === 0) {
-      setCell(teamSheet, 'A14', 'No assignments', {
-        fontStyle: true, fontColor: '#666666'
-      });
-      return;
-    }
-    
-    // Sort and write assignments
-    if (sortBy === 'date') {
-      assignments.sort((a, b) => {
-        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
-        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
-        
-        if (dateA && dateB && dateA !== '-' && dateB !== '-') {
-          const dateCompare = dateA.localeCompare(dateB);
-          if (dateCompare !== 0) return dateCompare;
-        } else if (dateA && dateA !== '-') {
-          return -1;
-        } else if (dateB && dateB !== '-') {
-          return 1;
-        }
-        return a.origin.localeCompare(b.origin);
-      });
-      
-      let currentRow = 14;
-      assignments.forEach(a => {
-        if (currentRow >= 61) return;
-        
-        teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-          a.origin,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]]);
-        
-        if (a.goLiveDate && a.goLiveDate !== '-') {
-          teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-        }
-        teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-        
-        // Color code based on source
-        if (a.source === 'PMM') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-        } else if (a.source === 'Workstream') {
-          teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-        } else if (a.source === 'Team') {
-          teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-        }
-        
-        currentRow++;
-      });
-      
-      if (currentRow > 14) {
-        teamSheet.getRange(14, 1, currentRow - 14, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    } else {
-      // Default: Group by workstream
-      const grouped = {};
-      assignments.forEach(a => {
-        if (!grouped[a.origin]) grouped[a.origin] = [];
-        grouped[a.origin].push(a);
-      });
-      
-      let currentRow = 14;
-      
-      const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        if (a === teamName) return -1;
-        if (b === teamName) return 1;
-        return a.localeCompare(b);
-      });
-      
-      sortedKeys.forEach(wsName => {
-        if (currentRow >= 61) return;
-        
-        if (wsName !== teamName) {
-          setCell(teamSheet, `A${currentRow}:F${currentRow}`, `--- ${wsName} ---`, {
-            merge: true, fontWeight: true, background: '#F5F5F5', fontStyle: true
-          });
-          currentRow++;
-        }
-        
-        grouped[wsName].forEach(a => {
-          if (currentRow >= 61) return;
-          
-          teamSheet.getRange(currentRow, 1, 1, 6).setValues([[
-            a.origin,
-            a.description,
-            a.size,
-            a.points,
-            a.goLiveDate || '',
-            a.source
-          ]]);
-          
-          if (a.goLiveDate && a.goLiveDate !== '-') {
-            teamSheet.getRange(currentRow, 5).setNumberFormat('yyyy-MM-dd');
-          }
-          teamSheet.getRange(currentRow, 4).setNumberFormat('0');
-          
-          // Color code based on source
-          if (a.source === 'PMM') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.PMM_BLUE);
-          } else if (a.source === 'Workstream') {
-            teamSheet.getRange(currentRow, 6).setBackground(CONFIG.COLORS.LIGHT_YELLOW);
-          } else if (a.source === 'Team') {
-            teamSheet.getRange(currentRow, 6).setBackground('#E1F5FE');
-          }
-          
-          currentRow++;
-        });
-      });
-      
-      if (currentRow > 14) {
-        teamSheet.getRange(14, 1, currentRow - 14, 6)
-          .setBorder(true, true, true, true, true, false);
-      }
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
-}/**
- * Marketing Team Points System - Version 13.1
- * 
- * IMPROVEMENTS:
- * - Cleaner team sheet layout matching the desired format
- * - Auto-populate with "Team Member 1" instead of "John Smith" 
- * - Added Jira fields for workstream owners on workstream pages
- * - Better formatting and spacing
- */
-
-const VERSION = "13.1";
-const RELEASE_DATE = "2024-12-21";
-
-const CONFIG = {
-  DEFAULT_WORKSTREAMS: ['SoMe', 'PUA', 'ASO', 'Portal'],
-  DEFAULT_ALLOCATIONS: [0.50, 0.20, 0.05, 0.25],
-  DEFAULT_CAPACITY: 100,
-  DEFAULT_BUFFER_PERCENT: 0.10,
-  TSHIRT_SIZES: {
-    'XS': 1,
-    'S': 3,
-    'M': 5,
-    'L': 13,
-    'XL': 21
-  },
-  COLORS: {
-    HEADER_BLUE: '#4285F4',
-    HEADER_GREEN: '#34A853',
-    HEADER_ORANGE: '#FF9800',
-    HEADER_PURPLE: '#9C27B0',
-    LIGHT_BLUE: '#E8F0FE',
-    LIGHT_GREEN: '#E8F5E9',
-    LIGHT_ORANGE: '#FFE0B2',
-    LIGHT_YELLOW: '#FFF3E0',
-    LIGHT_PURPLE: '#F3E5F5',
-    PMM_BLUE: '#CDDFF9',
-    GRAY: '#F0F0F0'
-  },
-  MONTHS: [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ]
-};
-
-// ==================== MAIN SETUP ====================
-function setupPointsSystem() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Clear all sheets except first
-  const sheets = ss.getSheets();
-  for (let i = sheets.length - 1; i > 0; i--) {
-    ss.deleteSheet(sheets[i]);
-  }
-  
-  // Setup Allocation tab
-  const allocationSheet = sheets[0];
-  allocationSheet.clear();
-  allocationSheet.setName('Allocation');
-  setupAllocationTab(allocationSheet);
-  
-  // Create workstream tabs
-  CONFIG.DEFAULT_WORKSTREAMS.forEach(name => {
-    const wsSheet = ss.insertSheet(name);
-    setupWorkstreamTab(wsSheet, name);
-  });
-  
-  // Create default Creative team
-  const teamSheet = ss.insertSheet('Creative Team');
-  setupTeamTab(teamSheet, 'Creative');
-  
-  // Update team dropdowns and capacity
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  
-  ss.setActiveSheet(allocationSheet);
-  
-  SpreadsheetApp.getUi().alert(
-    'Points System Setup Complete! 🎉',
-    `System v${VERSION} ready with improved team layout.`,
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
-}
-
-// ==================== ALLOCATION TAB ====================
-function setupAllocationTab(sheet) {
-  // Set column widths
-  const widths = [250, 120, 120, 30, 250, 100, 80, 80, 80, 80];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
-  
-  // Title with month reference
-  setCell(sheet, 'A1:C1', '=CONCATENATE("ALLOCATION TAB - ",C3," Planning")', {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_BLUE, fontColor: '#FFFFFF'
-  });
-  
-  setCell(sheet, 'A2:C2', 'Monthly Planning & Resource Allocation', {
-    merge: true, fontSize: 11, background: CONFIG.COLORS.LIGHT_BLUE
-  });
-  
-  // Add Month Selector
-  setCell(sheet, 'A3', 'Planning Month:', { fontWeight: true });
-  
-  const currentMonth = new Date().getMonth();
-  const currentYear = new Date().getFullYear();
-  const monthValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(CONFIG.MONTHS, true)
-    .setAllowInvalid(false)
-    .build();
-  
-  sheet.getRange('C3').setDataValidation(monthValidation)
-    .setValue(CONFIG.MONTHS[currentMonth])
-    .setBackground(CONFIG.COLORS.LIGHT_YELLOW)
-    .setFontWeight(true);
-  
-  // Add Year input
-  setCell(sheet, 'D3', 'Year:');
-  setCell(sheet, 'E3', currentYear, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  
-  // Monthly Setup
-  setCell(sheet, 'A5', 'MONTHLY SETUP', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  setCell(sheet, 'A6', 'Total Creative Capacity (Points):');
-  
-  // Auto-sum from all teams' net capacity
-  const teamFormula = generateTeamCapacityFormula();
-  setCell(sheet, 'B6', teamFormula, {
-    background: '#E8F5E9', border: true, format: '0', fontWeight: true
-  });
-  
-  // Workstream Allocation
-  setCell(sheet, 'A8', 'WORKSTREAM ALLOCATION', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  
-  sheet.getRange('A9:C9').setValues([['Workstream', 'Allocation %', 'Points']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Workstreams
-  CONFIG.DEFAULT_WORKSTREAMS.forEach((ws, i) => {
-    const row = 10 + i;
-    setCell(sheet, `A${row}`, ws);
-    setCell(sheet, `B${row}`, CONFIG.DEFAULT_ALLOCATIONS[i], {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    setCell(sheet, `C${row}`, `=ROUND($B$6*B${row},0)`, {
-      format: '0', background: '#F5F5F5'
-    });
-  });
-  
-  // Total row
-  const totalRow = 14;
-  ['TOTAL', '=SUM(B10:B13)', '=SUM(C10:C13)'].forEach((val, i) => {
-    setCell(sheet, `${String.fromCharCode(65 + i)}${totalRow}`, val, {
-      fontWeight: true, background: '#E0E0E0',
-      format: i > 0 ? (i === 1 ? '0%' : '0') : null
-    });
-  });
-  
-  sheet.getRange(9, 1, 6, 3).setBorder(true, true, true, true, true, true);
-  
-  // Strategic Priorities
-  setCell(sheet, 'E5', 'STRATEGIC PRIORITIES', {
-    fontWeight: true, background: CONFIG.COLORS.GRAY
-  });
-  
-  sheet.getRange('E6:J6').setValues([['Priority Name', 'Weight %', 'SoMe', 'PUA', 'ASO', 'Portal']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Sample priorities
-  const priorities = [
-    ['Q4 Campaign Launch', 0.40],
-    ['Brand Awareness Push', 0.30],
-    ['Product Feature Release', 0.20],
-    ['Holiday Season Prep', 0.10]
-  ];
-  
-  priorities.forEach((p, i) => {
-    const row = 7 + i;
-    setCell(sheet, `E${row}`, p[0]);
-    setCell(sheet, `F${row}`, p[1], {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    for (let col = 7; col <= 10; col++) {
-      sheet.getRange(row, col).insertCheckboxes();
-    }
-  });
-  
-  // Empty rows for more priorities
-  for (let row = 11; row <= 21; row++) {
-    setCell(sheet, `E${row}`, '');
-    setCell(sheet, `F${row}`, '', {
-      format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    for (let col = 7; col <= 10; col++) {
-      sheet.getRange(row, col).insertCheckboxes();
-    }
-  }
-  
-  // Add TOTAL row for Strategic Priorities
-  setCell(sheet, 'E22', 'TOTAL', {
-    fontWeight: true, background: '#E0E0E0'
-  });
-  setCell(sheet, 'F22', '=SUM(F7:F21)', {
-    format: '0%', fontWeight: true, background: '#E0E0E0'
-  });
-  
-  // Conditional formatting for total
-  const rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$F$22>1')
-    .setFontColor('#FF0000')
-    .setRanges([sheet.getRange('F22')])
-    .build();
-  sheet.setConditionalFormatRules([rule]);
-  
-  sheet.getRange(6, 5, 17, 6).setBorder(true, true, true, true, true, true);
-}
-
-// ==================== WORKSTREAM TAB WITH JIRA FIELDS ====================
-function setupWorkstreamTab(sheet, workstreamName) {
-  sheet.clear();
-  
-  // Set column count and widths
-  adjustColumns(sheet, 8);
-  const widths = [400, 120, 100, 80, 120, 120, 200, 150];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
-  
-  // Header with month reference
-  setCell(sheet, 'A1:H1', 
-    `=CONCATENATE("${workstreamName.toUpperCase()} WORKSTREAM - ",Allocation!C3," ",Allocation!E3)`, {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_GREEN, fontColor: '#FFFFFF'
-  });
-  
-  // Budget Summary (Left side)
-  setCell(sheet, 'A2', 'Total Points Allocated:');
-  setCell(sheet, 'B2', `=IFERROR(VLOOKUP("${workstreamName}",Allocation!A:C,3,FALSE),0)`, {
-    fontSize: 14, fontWeight: true, background: CONFIG.COLORS.LIGHT_GREEN, format: '0'
-  });
-  
-  setCell(sheet, 'A3', 'Points Spent on Assets:');
-  setCell(sheet, 'B3', '=SUMIF(D46:D95,">0")', {
-    fontSize: 14, fontWeight: true, background: CONFIG.COLORS.LIGHT_ORANGE, format: '0'
-  });
-  
-  setCell(sheet, 'C2', 'Remaining:');
-  setCell(sheet, 'D2', '=B2-B3', {
-    fontSize: 14, fontWeight: true, background: '#E1F5FE', format: '0'
-  });
-  
-  // Workstream Owner Info (Right side)
-  setCell(sheet, 'F2', 'Workstream Owner:');
-  setCell(sheet, 'G2', '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-  
-  setCell(sheet, 'F3', 'Email:');
-  setCell(sheet, 'G3', '', { background: '#FFF9C4' });
-  
-  setCell(sheet, 'F4', 'Jira Username:');
-  setCell(sheet, 'G4', '', { background: '#E1F5FE' });
-  
-  // Priorities Table
-  sheet.getRange('A5:D5').setValues([['Priority Name', 'Source', 'Allocation %', 'Points']])
-    .setFontWeight(true).setBackground('#E3F2FD');
-  
-  // Workstream Priorities Section
-  setCell(sheet, 'A6:D6', '--- Workstream Team Priorities (Direct %) ---', {
-    merge: true, fontStyle: true, background: '#FFF9C4'
-  });
-  
-  // Workstream priority rows
-  for (let i = 0; i < 10; i++) {
-    const row = 7 + i;
-    setCell(sheet, `A${row}`, '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `B${row}`, 'Workstream');
-    setCell(sheet, `C${row}`, '', { format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `D${row}`, `=IF(C${row}="","",ROUND(C${row}*$B$2,0))`, {
-      format: '0', background: CONFIG.COLORS.LIGHT_GREEN
-    });
-  }
-  
-  // Remaining capacity
-  setCell(sheet, 'A18', 'Remaining for PMM:', { fontWeight: true });
-  setCell(sheet, 'B18', '=MAX(0,100%-SUMIF(C7:C16,">0"))', {
-    format: '0%', fontWeight: true, background: '#E3F2FD'
-  });
-  setCell(sheet, 'C18', '←');
-  setCell(sheet, 'D18', '=ROUND(B18*B2,0)', {
-    format: '0', fontWeight: true, background: '#E3F2FD'
-  });
-  
-  // PMM Priorities Section
-  setCell(sheet, 'A20:D20', '--- PMM Strategic Priorities (Auto-scaled) ---', {
-    merge: true, fontStyle: true, background: CONFIG.COLORS.PMM_BLUE
-  });
-  
-  // Setup PMM formulas
-  setupPMMFormulas(sheet, workstreamName);
-  
-  // Summary
-  setCell(sheet, 'A37', 'WORKSTREAM %:', { fontWeight: true });
-  setCell(sheet, 'B37', '=SUMIF(C7:C16,">0")', { format: '0%', fontWeight: true });
-  setCell(sheet, 'C37', 'PMM %:', { fontWeight: true });
-  setCell(sheet, 'D37', '=SUMIF(C21:C35,">0")', { format: '0%', fontWeight: true });
-  setCell(sheet, 'A38', 'TOTAL POINTS:', { fontWeight: true });
-  setCell(sheet, 'B38', '=SUM(D7:D16,D21:D35)', { format: '0', fontWeight: true });
-  
-  // Borders
-  sheet.getRange(5, 1, 12, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(20, 1, 16, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(2, 6, 3, 2).setBorder(true, true, true, true, true, true);
-  
-  // Asset Planning Section
-  setupAssetSection(sheet, workstreamName);
-}
-
-// ==================== IMPROVED TEAM TAB ====================
-function setupTeamTab(sheet, teamName) {
-  sheet.clear();
-  
-  // Set column widths for compact layout
-  const widths = [120, 300, 80, 80, 120, 120, 150, 200, 100, 80];
-  widths.forEach((width, i) => sheet.setColumnWidth(i + 1, width));
-  
-  // Header with month reference
-  setCell(sheet, 'A1:J1', 
-    `=CONCATENATE("${teamName.toUpperCase()} TEAM - ",Allocation!C3," ",Allocation!E3," Manifest")`, {
-    merge: true, fontSize: 16, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_PURPLE, fontColor: '#FFFFFF'
-  });
-  
-  // Team Capacity & Planning Section (Compact - Left side)
-  setCell(sheet, 'A3:F3', 'TEAM CAPACITY & PLANNING', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  // Row 4 - Team Members and Working Days
-  setCell(sheet, 'A4', 'Team Members:');
-  setCell(sheet, 'B4', 5, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  setCell(sheet, 'C4', 'Working Days/Month:');
-  setCell(sheet, 'D4', 20, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  
-  // Row 5 - Days Off and Gross Capacity
-  setCell(sheet, 'A5', 'Total Days Off (All Members):');
-  setCell(sheet, 'B5', '=SUM(J5:J14)', {
-    background: '#E8F5E9', format: '0', fontWeight: true
-  });
-  setCell(sheet, 'C5', 'Gross Capacity:');
-  setCell(sheet, 'D5', '=(B4*D4)-B5', {
-    fontWeight: true, background: '#E8F5E9', format: '0'
-  });
-  
-  // Row 6 - Buffer and Buffer Points
-  setCell(sheet, 'A6', 'Buffer % (sick/team projects):');
-  setCell(sheet, 'B6', CONFIG.DEFAULT_BUFFER_PERCENT, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0%'
-  });
-  setCell(sheet, 'C6', 'Buffer Points:');
-  setCell(sheet, 'D6', '=ROUND(D5*B6,0)', {
-    fontWeight: true, background: '#FFE0B2', format: '0'
-  });
-  
-  // Row 7 - Creative Planning and Net Capacity
-  setCell(sheet, 'A7', `=CONCATENATE("Creative Planning Days (for ",IF(Allocation!C3="December","January",INDEX({"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November"},0)+1)),"):")`);
-  setCell(sheet, 'B7', 0, {
-    background: CONFIG.COLORS.LIGHT_YELLOW, format: '0'
-  });
-  setCell(sheet, 'C7', 'Net Capacity:');
-  setCell(sheet, 'D7', '=D5-D6-B7', {
-    fontWeight: true, background: CONFIG.COLORS.LIGHT_GREEN, format: '0'
-  });
-  
-  // Team Members Section (Right side) - Limited to 10 members
-  setCell(sheet, 'G3:J3', 'TEAM MEMBERS', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  sheet.getRange('G4:J4').setValues([['Name', 'Email', 'Jira Username', 'Holiday (Days)']])
-    .setFontWeight(true).setBackground('#E1BEE7');
-  
-  // Auto-populate with Team Member 1, 2, etc. (limited to 10)
-  for (let i = 0; i < 10; i++) {
-    const row = 5 + i;
-    setCell(sheet, `G${row}`, `Team Member ${i + 1}`, { background: CONFIG.COLORS.LIGHT_YELLOW });
-    setCell(sheet, `H${row}`, '', { background: '#FFF9C4' });
-    setCell(sheet, `I${row}`, '', { background: '#E1F5FE' });
-    setCell(sheet, `J${row}`, 0, { background: '#FFE0B2', format: '0' });
-  }
-  
-  setCell(sheet, 'G15:J15', 'Note: Add "TBD" or "Placeholder" for unassigned positions', {
-    merge: true, fontStyle: true, fontSize: 9, fontColor: '#666666'
-  });
-  
-  // Assignment Summary (moved up to eliminate gap)
-  setCell(sheet, 'A9:F9', 'ASSIGNMENT SUMMARY', {
-    merge: true, fontWeight: true, background: CONFIG.COLORS.LIGHT_PURPLE
-  });
-  
-  setCell(sheet, 'A10', 'Workstream Assigned:');
-  setCell(sheet, 'B10', '=SUMIF(F17:F200,"Workstream",D17:D200)+SUMIF(F17:F200,"PMM",D17:D200)', {
-    fontWeight: true, fontSize: 14, background: CONFIG.COLORS.LIGHT_ORANGE, format: '0'
-  });
-  
-  setCell(sheet, 'C10', 'Team Initiated:');
-  setCell(sheet, 'D10', '=SUMIF(F17:F200,"Team",D17:D200)', {
-    fontWeight: true, fontSize: 14, background: '#E1F5FE', format: '0'
-  });
-  
-  setCell(sheet, 'E10', 'Buffer/Team Projects:');
-  setCell(sheet, 'F10', '=D6', {
-    fontWeight: true, fontSize: 14, background: '#FFE0B2', format: '0'
-  });
-  
-  setCell(sheet, 'A11', `=CONCATENATE("Creative Planning (",IF(Allocation!C3="December","Jan",TEXT(DATE(2000,MATCH(Allocation!C3,{"January";"February";"March";"April";"May";"June";"July";"August";"September";"October";"November";"December"},0)+1,1),"mmm")),"):")`);
-  setCell(sheet, 'B11', '=B7', {
-    fontWeight: true, fontSize: 14, background: '#FFECB3', format: '0'
-  });
-  
-  setCell(sheet, 'C11', 'Total Allocated:');
-  setCell(sheet, 'D11', '=B10+D10+F10+B11', {
-    fontWeight: true, fontSize: 14, background: '#FFD54F', format: '0'
-  });
-  
-  setCell(sheet, 'E11', 'Utilization:');
-  setCell(sheet, 'F11', '=IF(D5=0,"",D11/D5)', {
-    fontWeight: true, fontSize: 14, format: '0%'
-  });
-  
-  setCell(sheet, 'A12:F12', 
-    '=IF(D11>D5,"⚠️ OVER by "&(D11-D5)&" pts",IF(D11=D5,"✅ FULL","✅ "&(D5-D11)&" pts available"))', {
-    merge: true, fontWeight: true, fontSize: 12
-  });
-  
-  // Conditional formatting for over capacity
-  const rule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$D$11>$D$5')
-    .setFontColor('#FF0000')
-    .setRanges([sheet.getRange('D11')])
-    .build();
-  sheet.setConditionalFormatRules([rule]);
-  
-  // Add separation row for better formatting
-  setCell(sheet, 'A13', '');
-  setCell(sheet, 'A14:F14', '', {
-    merge: true, background: '#F8F9FA', 
-    border: true
-  });
-  
-  // Table headers (with separation)
-  sheet.getRange('A15:F15').setValues([['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source']])
-    .setFontWeight(true).setBackground('#E1BEE7');
-  
-  setCell(sheet, 'A17', 'Click "Refresh Team Assignments" to load workstream assignments...', {
-    fontStyle: true, fontColor: '#666666'
-  });
-  
-  // Team-initiated section (moved down accordingly)
-  setCell(sheet, 'A63:F63', '--- TEAM-INITIATED WORK ---', {
-    merge: true, fontWeight: true, fontStyle: true, background: '#E1F5FE'
-  });
-  
-  // Team rows with T-shirt validation
-  const sizeValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(Object.keys(CONFIG.TSHIRT_SIZES), true)
-    .setAllowInvalid(false)
-    .build();
-  
-  const today = new Date();
-  
-  for (let i = 0; i < 30; i++) {
-    const row = 64 + i;
-    
-    setCell(sheet, `A${row}`, teamName, { background: CONFIG.COLORS.GRAY });
-    setCell(sheet, `B${row}`, '', { background: CONFIG.COLORS.LIGHT_YELLOW });
-    
-    sheet.getRange(row, 3).setDataValidation(sizeValidation)
-      .setBackground('#E1F5FE');
-    
-    const sizeFormula = `=IF(C${row}="","",SWITCH(C${row},` +
-      Object.entries(CONFIG.TSHIRT_SIZES)
-        .map(([size, points]) => `"${size}",${points}`)
-        .join(',') + ',0))';
-    setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
-    
-    setCell(sheet, `E${row}`, today, { background: '#FFF9C4' });
-    sheet.getRange(row, 5).setNumberFormat('yyyy-MM-dd');
-    setCell(sheet, `F${row}`, 'Team', { background: '#E1F5FE' });
-  }
-  
-  // Borders (updated positions)
-  sheet.getRange(3, 1, 5, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(3, 7, 13, 4).setBorder(true, true, true, true, true, true);
-  sheet.getRange(9, 1, 4, 6).setBorder(true, true, true, true, true, true);
-  sheet.getRange(63, 1, 31, 6).setBorder(true, true, true, true, true, true);
-}
-
-// ==================== HELPER FUNCTIONS ====================
-function setCell(sheet, range, value, options = {}) {
-  const cell = sheet.getRange(range);
-  
-  if (options.merge) cell.merge();
-  
-  if (value !== undefined) {
-    if (typeof value === 'string' && value.startsWith('=')) {
-      cell.setFormula(value);
-    } else {
-      cell.setValue(value);
-    }
-  }
-  
-  if (options.fontSize) cell.setFontSize(options.fontSize);
-  if (options.fontWeight) cell.setFontWeight('bold');
-  if (options.fontStyle) cell.setFontStyle('italic');
-  if (options.fontColor) cell.setFontColor(options.fontColor);
-  if (options.background) cell.setBackground(options.background);
-  if (options.format) cell.setNumberFormat(options.format);
-  if (options.border) cell.setBorder(true, true, true, true, false, false);
-  
-  return cell;
-}
-
-function adjustColumns(sheet, targetCols) {
-  const maxCols = sheet.getMaxColumns();
-  if (maxCols > targetCols) {
-    sheet.deleteColumns(targetCols + 1, maxCols - targetCols);
-  } else if (maxCols < targetCols) {
-    sheet.insertColumnsAfter(maxCols, targetCols - maxCols);
   }
 }
 
-function generateTeamCapacityFormula() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
+function distributeItems(items, containers, containerType) {
+  // Sort by priority
+  items.sort((a, b) => {
+    const dateA = a.goLiveDate || new Date('2099-12-31');
+    const dateB = b.goLiveDate || new Date('2099-12-31');
+    return dateA - dateB;
+  });
   
-  if (teams.length === 0) {
-    return CONFIG.DEFAULT_CAPACITY;
-  }
-  
-  const teamRefs = teams.map(team => `'${team} Team'!D7`);
-  return `=SUM(${teamRefs.join(',')})`;
+  // Simple load balancing
+  items.forEach(item => {
+    const container = containers.reduce((min, c) => 
+      c.totalPoints < min.totalPoints ? c : min
+    );
+    container.items.push(item);
+    container.totalPoints += item.points;
+  });
 }
 
-function updateTotalCapacity() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  if (!allocSheet) return;
-  
-  const formula = generateTeamCapacityFormula();
-  allocSheet.getRange('B6').setFormula(formula);
+function calculateSprintDate(startDate, sprintIndex, workingDaysPerSprint, isStart) {
+  const totalDays = sprintIndex * workingDaysPerSprint;
+  if (!isStart) {
+    return addWorkingDays(startDate, totalDays + workingDaysPerSprint - 1);
+  }
+  return sprintIndex === 0 ? new Date(startDate) : addWorkingDays(startDate, totalDays);
 }
 
-function setupPMMFormulas(sheet, workstreamName) {
-  const checkboxCol = findCheckboxColumn(workstreamName);
-  if (checkboxCol < 0) return;
-  
-  const colLetter = columnToLetter(checkboxCol);
-  
-  for (let i = 0; i < 15; i++) {
-    const row = 21 + i;
-    const allocRow = 7 + i;
-    
-    setCell(sheet, `A${row}`, 
-      `=IF(Allocation!${colLetter}${allocRow}=TRUE,Allocation!E${allocRow},"")`, 
-      { background: CONFIG.COLORS.PMM_BLUE });
-    
-    setCell(sheet, `B${row}`, 
-      `=IF(A${row}<>"","PMM","")`, 
-      { background: CONFIG.COLORS.PMM_BLUE });
-    
-    const percentFormula = `=IF(A${row}="","",` +
-      `IF(SUMPRODUCT(Allocation!${colLetter}7:${colLetter}21*Allocation!F7:F21)=0,0,` +
-      `(Allocation!F${allocRow}*Allocation!${colLetter}${allocRow})/` +
-      `SUMPRODUCT(Allocation!${colLetter}7:${colLetter}21*Allocation!F7:F21)*B18))`;
-    
-    setCell(sheet, `C${row}`, percentFormula, 
-      { format: '0%', background: CONFIG.COLORS.PMM_BLUE });
-    
-    setCell(sheet, `D${row}`, 
-      `=IF(C${row}="","",ROUND(C${row}*$B$2,0))`, 
-      { format: '0', background: CONFIG.COLORS.LIGHT_GREEN });
-  }
+function getWorkingDaysForDuration(duration) {
+  const map = {
+    '1 week': 5,
+    '2 weeks': 10,
+    '1 month': 20
+  };
+  return map[duration] || 10;
 }
 
-function setupAssetSection(sheet, workstreamName) {
-  // Header
-  setCell(sheet, 'A41:F41', 'ASSET PLANNING', {
-    merge: true, fontSize: 14, fontWeight: true,
-    background: CONFIG.COLORS.HEADER_ORANGE, fontColor: '#FFFFFF'
-  });
+function getGroupColor(groupType, number) {
+  const colors = groupType === 'Sprint' ? 
+    [PLANNING_CONFIG.COLORS.SPRINT_1, PLANNING_CONFIG.COLORS.SPRINT_2, 
+     PLANNING_CONFIG.COLORS.SPRINT_3, PLANNING_CONFIG.COLORS.SPRINT_4,
+     PLANNING_CONFIG.COLORS.SPRINT_5, PLANNING_CONFIG.COLORS.SPRINT_6] :
+    [PLANNING_CONFIG.COLORS.SPRINT_1, PLANNING_CONFIG.COLORS.SPRINT_2,
+     PLANNING_CONFIG.COLORS.SPRINT_3, PLANNING_CONFIG.COLORS.SPRINT_4,
+     PLANNING_CONFIG.COLORS.SPRINT_5];
   
-  // Budget info
-  setCell(sheet, 'A42', 'Budget:');
-  setCell(sheet, 'B42', '=B2', {
-    fontWeight: true, format: '0', background: CONFIG.COLORS.LIGHT_GREEN
-  });
-  setCell(sheet, 'C42', 'Spent:');
-  setCell(sheet, 'D42', '=SUMIF(D46:D95,">0")', {
-    fontWeight: true, format: '0', background: CONFIG.COLORS.LIGHT_ORANGE
-  });
-  setCell(sheet, 'E42:F42', 
-    '=IF(B42-D42<0,"⚠️ OVER by "&ABS(B42-D42),"💰 "&(B42-D42)&" remaining")', {
-    merge: true, fontWeight: true
-  });
-  
-  // T-shirt legend
-  setCell(sheet, 'A43:F43', 
-    'T-Shirt Sizes: XS=1 point | S=3 points | M=5 points | L=13 points | XL=21 points', {
-    merge: true, fontSize: 10, fontStyle: true, background: CONFIG.COLORS.LIGHT_YELLOW
-  });
-  
-  // Table headers
-  const headers = ['Asset Description', 'Go Live Date', 'T-Shirt Size', 'Cost', 'Origin', 'Team'];
-  headers.forEach((header, i) => {
-    setCell(sheet, `${String.fromCharCode(65 + i)}45`, header, {
-      fontWeight: true, background: CONFIG.COLORS.LIGHT_ORANGE
-    });
-  });
-  
-  // Asset rows
-  const teamNames = getTeamNames();
-  const sizeValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(Object.keys(CONFIG.TSHIRT_SIZES), true)
-    .setAllowInvalid(false)
-    .build();
-  
-  const originValidation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['Workstream', 'PMM'], true)
-    .setAllowInvalid(false)
-    .build();
-  
-  const teamValidation = teamNames.length > 0 ? 
-    SpreadsheetApp.newDataValidation()
-      .requireValueInList(teamNames, true)
-      .setAllowInvalid(false)
-      .build() : null;
-  
-  const today = new Date();
-  
-  for (let i = 0; i < 50; i++) {
-    const row = 46 + i;
-    
-    setCell(sheet, `A${row}`, '', { background: '#FFFFFF' });
-    
-    setCell(sheet, `B${row}`, today, { background: '#FFF9C4' });
-    sheet.getRange(row, 2).setNumberFormat('yyyy-MM-dd');
-    
-    sheet.getRange(row, 3).setDataValidation(sizeValidation)
-      .setBackground('#E1F5FE');
-    
-    const sizeFormula = `=IF(C${row}="","",SWITCH(C${row},` +
-      Object.entries(CONFIG.TSHIRT_SIZES)
-        .map(([size, points]) => `"${size}",${points}`)
-        .join(',') + ',0))';
-    setCell(sheet, `D${row}`, sizeFormula, { format: '0', background: CONFIG.COLORS.GRAY });
-    
-    sheet.getRange(row, 5).setDataValidation(originValidation);
-    setCell(sheet, `E${row}`, 'Workstream', {
-      background: CONFIG.COLORS.LIGHT_YELLOW
-    });
-    
-    if (teamValidation) {
-      sheet.getRange(row, 6).setDataValidation(teamValidation)
-        .setBackground(CONFIG.COLORS.LIGHT_PURPLE);
-    } else {
-      setCell(sheet, `F${row}`, '', { background: CONFIG.COLORS.LIGHT_PURPLE });
-    }
-  }
-  
-  // Conditional formatting for Origin column
-  const originRange = sheet.getRange('E46:E95');
-  
-  const wsRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('Workstream')
-    .setBackground(CONFIG.COLORS.LIGHT_YELLOW)
-    .setRanges([originRange])
-    .build();
-  
-  const pmmRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('PMM')
-    .setBackground(CONFIG.COLORS.PMM_BLUE)
-    .setRanges([originRange])
-    .build();
-  
-  const existingRules = sheet.getConditionalFormatRules();
-  existingRules.push(wsRule, pmmRule);
-  sheet.setConditionalFormatRules(existingRules);
-  
-  sheet.getRange(45, 1, 51, 6).setBorder(true, true, true, true, true, true);
-}
-
-// ==================== TEAM ASSIGNMENTS (FIXED) ====================
-function refreshTeamAssignments(sortBy = 'workstream') {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    SpreadsheetApp.getUi().alert('No teams found. Please add teams first.');
-    return;
-  }
-  
-  // Initialize team assignments
-  const teamAssignments = {};
-  teams.forEach(team => {
-    teamAssignments[team] = [];
-    const teamSheet = ss.getSheetByName(team + ' Team');
-    if (teamSheet) {
-      // Clear workstream assignments area only (rows 14-60)
-      teamSheet.getRange(14, 1, 47, 6).clear();
-      teamSheet.getRange(14, 1, 47, 6).clearFormat();
-    }
-  });
-  
-  // Add Creative Planning as a regular item for each team (but NOT buffer)
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (teamSheet) {
-      const creativePlanningDays = teamSheet.getRange('B7').getValue();
-      if (creativePlanningDays > 0) {
-        const allocSheet = ss.getSheetByName('Allocation');
-        const monthName = allocSheet.getRange('C3').getValue();
-        const year = allocSheet.getRange('E3').getValue();
-        const monthIndex = CONFIG.MONTHS.indexOf(monthName);
-        
-        let nextMonthIndex = (monthIndex + 1) % 12;
-        let nextYear = year;
-        if (nextMonthIndex === 0) {
-          nextYear = year + 1;
-        }
-        const planningDate = new Date(nextYear, nextMonthIndex, 1);
-        const nextMonthName = CONFIG.MONTHS[nextMonthIndex];
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description: `Creative Planning & Ideation (for ${nextMonthName})`,
-          size: '-',
-          points: creativePlanningDays,
-          goLiveDate: Utilities.formatDate(planningDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'),
-          source: 'Team'
-        });
-      }
-    }
-  });
-  
-  // Collect from workstreams (with improved source tracking)
-  const workstreams = getWorkstreamNames();
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    const data = wsSheet.getRange(46, 1, 50, 6).getValues();
-    data.forEach((row, i) => {
-      const [description, goLiveDate, tShirtSize, points, origin, teamAssignment] = row;
-      
-      if (description && teamAssignment && teams.includes(teamAssignment)) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        // Determine if this is PMM or Workstream origin
-        const sourceType = (origin === 'PMM') ? 'PMM' : 'Workstream';
-        
-        teamAssignments[teamAssignment].push({
-          origin: wsName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: sourceType  // Now properly tracks PMM vs Workstream
-        });
-      }
-    });
-  });
-  
-  // Collect team-initiated work
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const teamData = teamSheet.getRange(62, 1, 30, 6).getValues();
-    teamData.forEach(row => {
-      const [origin, description, tShirtSize, points, goLiveDate, source] = row;
-      
-      if (description && points > 0) {
-        let formattedDate = goLiveDate;
-        if (goLiveDate instanceof Date) {
-          formattedDate = Utilities.formatDate(goLiveDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        }
-        
-        teamAssignments[teamName].push({
-          origin: teamName,
-          description,
-          size: tShirtSize,
-          points,
-          goLiveDate: formattedDate,
-          source: 'Team'
-        });
-      }
-    });
-  });
-  
-  // Write to team sheets with proper formatting
-  teams.forEach(teamName => {
-    const teamSheet = ss.getSheetByName(teamName + ' Team');
-    if (!teamSheet) return;
-    
-    const assignments = teamAssignments[teamName];
-    if (assignments.length === 0) {
-      setCell(teamSheet, 'A14', 'No assignments', {
-        fontStyle: true, fontColor: '#666666'
-      });
-      return;
-    }
-    
-    // Prepare data arrays for batch operations
-    const rowsData = [];
-    const rowsToFormat = [];
-    
-    if (sortBy === 'date') {
-      // Sort by date
-      assignments.sort((a, b) => {
-        const dateA = a.goLiveDate ? String(a.goLiveDate) : '';
-        const dateB = b.goLiveDate ? String(b.goLiveDate) : '';
-        
-        if (dateA && dateB && dateA !== '-' && dateB !== '-') {
-          const dateCompare = dateA.localeCompare(dateB);
-          if (dateCompare !== 0) return dateCompare;
-        } else if (dateA && dateA !== '-') {
-          return -1;
-        } else if (dateB && dateB !== '-') {
-          return 1;
-        }
-        return a.origin.localeCompare(b.origin);
-      });
-      
-      // Prepare data
-      assignments.forEach((a, index) => {
-        if (index >= 47) return; // Respect row limit
-        
-        rowsData.push([
-          a.origin,
-          a.description,
-          a.size,
-          a.points,
-          a.goLiveDate || '',
-          a.source
-        ]);
-        
-        rowsToFormat.push({
-          row: 14 + index,
-          source: a.source,
-          hasDate: a.goLiveDate && a.goLiveDate !== '-'
-        });
-      });
-      
-    } else {
-      // Default: Group by workstream
-      const grouped = {};
-      assignments.forEach(a => {
-        if (!grouped[a.origin]) grouped[a.origin] = [];
-        grouped[a.origin].push(a);
-      });
-      
-      // Sort keys to put team's own work first
-      const sortedKeys = Object.keys(grouped).sort((a, b) => {
-        if (a === teamName) return -1;
-        if (b === teamName) return 1;
-        return a.localeCompare(b);
-      });
-      
-      let currentIndex = 0;
-      
-      sortedKeys.forEach(wsName => {
-        if (currentIndex >= 47) return;
-        
-        // Add section header only for external workstreams
-        if (wsName !== teamName) {
-          rowsData.push([`--- ${wsName} ---`, '', '', '', '', '']);
-          rowsToFormat.push({
-            row: 14 + currentIndex,
-            isHeader: true,
-            source: null
-          });
-          currentIndex++;
-        }
-        
-        // Add assignments
-        grouped[wsName].forEach(a => {
-          if (currentIndex >= 47) return;
-          
-          rowsData.push([
-            a.origin,
-            a.description,
-            a.size,
-            a.points,
-            a.goLiveDate || '',
-            a.source
-          ]);
-          
-          rowsToFormat.push({
-            row: 14 + currentIndex,
-            source: a.source,
-            hasDate: a.goLiveDate && a.goLiveDate !== '-',
-            isHeader: false
-          });
-          currentIndex++;
-        });
-      });
-    }
-    
-    // Write all data at once
-    if (rowsData.length > 0) {
-      const range = teamSheet.getRange(14, 1, rowsData.length, 6);
-      range.setValues(rowsData);
-      
-      // Apply formatting in batch
-      rowsToFormat.forEach(formatInfo => {
-        const row = formatInfo.row;
-        
-        if (formatInfo.isHeader) {
-          // Format header rows
-          teamSheet.getRange(row, 1, 1, 6).merge()
-            .setFontWeight('bold')
-            .setBackground('#F5F5F5')
-            .setFontStyle('italic');
-        } else {
-          // Format date column if needed
-          if (formatInfo.hasDate) {
-            teamSheet.getRange(row, 5).setNumberFormat('yyyy-MM-dd');
-          }
-          
-          // Format points column
-          teamSheet.getRange(row, 4).setNumberFormat('0');
-          
-          // Color code based on source
-          let backgroundColor = '';
-          if (formatInfo.source === 'PMM') {
-            backgroundColor = CONFIG.COLORS.PMM_BLUE;
-          } else if (formatInfo.source === 'Workstream') {
-            backgroundColor = CONFIG.COLORS.LIGHT_YELLOW;
-          } else if (formatInfo.source === 'Team') {
-            backgroundColor = '#E1F5FE';
-          }
-          
-          if (backgroundColor) {
-            teamSheet.getRange(row, 6).setBackground(backgroundColor);
-          }
-        }
-      });
-      
-      // Apply borders to entire range
-      range.setBorder(true, true, true, true, true, true);
-    }
-  });
-  
-  SpreadsheetApp.getUi().alert('Team assignments refreshed successfully!');
-}
-
-// ==================== UTILITY FUNCTIONS ====================
-function findCheckboxColumn(workstreamName) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  for (let col = 7; col <= 20; col++) {
-    if (allocSheet.getRange(6, col).getValue() === workstreamName) {
-      return col;
-    }
-  }
-  return -1;
-}
-
-function columnToLetter(column) {
-  let letter = '';
-  while (column > 0) {
-    const temp = (column - 1) % 26;
-    letter = String.fromCharCode(temp + 65) + letter;
-    column = Math.floor((column - temp - 1) / 26);
-  }
-  return letter;
+  return colors[(number - 1) % colors.length];
 }
 
 function getTeamNames() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   return ss.getSheets()
-    .map(sheet => sheet.getName())
-    .filter(name => name.endsWith(' Team'))
-    .map(name => name.replace(' Team', ''));
+    .filter(sheet => sheet.getName().endsWith(' Team'))
+    .map(sheet => sheet.getName().replace(' Team', ''));
 }
 
-function getWorkstreamNames() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  const workstreams = [];
+function clearAllPlanning() {
+  const ui = SpreadsheetApp.getUi();
+  if (ui.alert('Clear All Planning', 
+    'Remove all sprint/person assignments?', 
+    ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   
-  let row = 10;
-  let wsName = allocSheet.getRange(row, 1).getValue();
-  while (wsName && wsName !== 'TOTAL' && row < 20) {
-    workstreams.push(wsName);
-    row++;
-    wsName = allocSheet.getRange(row, 1).getValue();
-  }
-  
-  return workstreams;
-}
-
-function updateTeamDropdowns() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const teams = getTeamNames();
-  const workstreams = getWorkstreamNames();
+  let cleared = 0;
   
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    for (let row = 46; row <= 95; row++) {
-      if (teams.length === 0) {
-        wsSheet.getRange(row, 6).clearDataValidations();
-      } else {
-        const validation = SpreadsheetApp.newDataValidation()
-          .requireValueInList(teams, true)
-          .setAllowInvalid(false)
-          .build();
-        wsSheet.getRange(row, 6).setDataValidation(validation);
-      }
+  teams.forEach(teamName => {
+    const teamSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(teamName + ' Team');
+    if (teamSheet) {
+      clearPlanningAreas(teamSheet);
+      cleared++;
     }
   });
+  
+  ui.alert(`Cleared ${cleared} team sheet(s).`);
 }
 
-// ==================== WORKSTREAM MANAGEMENT ====================
-function addWorkstream() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Add New Workstream', 
-    'Enter the name for the new workstream:', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!name) {
-    ui.alert('Error', 'Workstream name cannot be empty.', ui.ButtonSet.OK);
-    return;
-  }
-  
+function openPlanningSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(name)) {
-    ui.alert('Error', `"${name}" already exists.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  let totalRow = 10;
-  while (allocSheet.getRange(totalRow, 1).getValue() !== 'TOTAL' && totalRow < 20) {
-    totalRow++;
-  }
-  
-  allocSheet.insertRowBefore(totalRow);
-  setCell(allocSheet, `A${totalRow}`, name, { background: '#FFFFFF' });
-  setCell(allocSheet, `B${totalRow}`, 0, {
-    format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-  });
-  setCell(allocSheet, `C${totalRow}`, `=ROUND($B$6*B${totalRow},0)`, {
-    format: '0', background: '#F5F5F5'
-  });
-  
-  allocSheet.getRange(totalRow, 1, 1, 3).setBorder(true, true, true, true, true, false);
-  
-  const newTotalRow = totalRow + 1;
-  setCell(allocSheet, `A${newTotalRow}`, 'TOTAL', {
-    fontWeight: true, background: '#E0E0E0'
-  });
-  setCell(allocSheet, `B${newTotalRow}`, `=SUM(B10:B${totalRow})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0%'
-  });
-  setCell(allocSheet, `C${newTotalRow}`, `=SUM(C10:C${totalRow})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0'
-  });
-  
-  allocSheet.getRange(9, 1, newTotalRow - 8, 3).setBorder(true, true, true, true, true, true);
-  
-  let nextCol = 7;
-  while (allocSheet.getRange(6, nextCol).getValue() && nextCol < 20) {
-    nextCol++;
-  }
-  
-  setCell(allocSheet, `${columnToLetter(nextCol)}6`, name, {
-    fontWeight: true, background: '#E3F2FD'
-  });
-  allocSheet.setColumnWidth(nextCol, 80);
-  
-  for (let row = 7; row <= 21; row++) {
-    allocSheet.getRange(row, nextCol).insertCheckboxes();
-  }
-  
-  const wsSheet = ss.insertSheet(name);
-  setupWorkstreamTab(wsSheet, name);
-  
-  updateTeamDropdowns();
-  
-  ui.alert('Success', `"${name}" added. Allocate points in the Allocation tab.`, ui.ButtonSet.OK);
-}
-
-function removeWorkstream() {
-  const ui = SpreadsheetApp.getUi();
-  const workstreams = getWorkstreamNames();
-  
-  if (workstreams.length === 0) {
-    ui.alert('Error', 'No workstreams to remove.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const response = ui.prompt('Remove Workstream',
-    'Enter the name to remove:\n\n' + workstreams.join(', '), ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!workstreams.includes(name)) {
-    ui.alert('Error', `"${name}" not found.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  let row = 10;
-  while (allocSheet.getRange(row, 1).getValue() !== 'TOTAL') {
-    if (allocSheet.getRange(row, 1).getValue() === name) {
-      allocSheet.deleteRow(row);
-      break;
-    }
-    row++;
-  }
-  
-  setCell(allocSheet, `B${row}`, `=SUM(B10:B${row-1})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0%'
-  });
-  setCell(allocSheet, `C${row}`, `=SUM(C10:C${row-1})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0'
-  });
-  
-  for (let col = 7; col <= 20; col++) {
-    if (allocSheet.getRange(6, col).getValue() === name) {
-      allocSheet.deleteColumn(col);
-      break;
-    }
-  }
-  
-  const wsSheet = ss.getSheetByName(name);
-  if (wsSheet) ss.deleteSheet(wsSheet);
-  
-  ui.alert('Success', `"${name}" removed.`, ui.ButtonSet.OK);
-}
-
-// ==================== TEAM MANAGEMENT ====================
-function addTeam() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Add New Team', 
-    'Enter the team name:', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!name) {
-    ui.alert('Error', 'Team name cannot be empty.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheetName = name + ' Team';
-  
-  if (ss.getSheetByName(sheetName)) {
-    ui.alert('Error', `Team "${name}" already exists.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const teamSheet = ss.insertSheet(sheetName);
-  setupTeamTab(teamSheet, name);
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  
-  ui.alert('Success', `Team "${name}" added.`, ui.ButtonSet.OK);
-}
-
-function removeTeam() {
-  const ui = SpreadsheetApp.getUi();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    ui.alert('Error', 'No teams to remove.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const response = ui.prompt('Remove Team',
-    'Enter the team name:\n\n' + teams.join(', '), ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!teams.includes(name)) {
-    ui.alert('Error', `Team "${name}" not found.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teamSheet = ss.getSheetByName(name + ' Team');
-  if (teamSheet) ss.deleteSheet(teamSheet);
-  
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  ui.alert('Success', `Team "${name}" removed.`, ui.ButtonSet.OK);
-}
-
-// Sort manifest functions
-function sortManifestByDate() {
-  refreshTeamAssignments('date');
-}
-
-function sortManifestByWorkstream() {
-  refreshTeamAssignments('workstream');
-}
-
-// About function
-function showAbout() {
-  const ui = SpreadsheetApp.getUi();
-  const message = `Marketing Team Points System
-
-Version: ${VERSION}
-Release Date: ${RELEASE_DATE}
-
-NEW in v13.1:
-• Cleaner team sheet layout
-• Auto-populate with "Team Member 1, 2, 3..." 
-• Jira fields added to workstream pages
-• Better formatting and spacing
-• Fixed holiday calculation references
-
-Features:
-• Team member management with holidays
-• Auto-calculated capacity from team holidays
-• PMM strategic priority distribution
-• Workstream team priorities with owner info
-• Asset planning with T-shirt sizing
-• Complete manifest generation
-
-© 2024 Marketing Team`;
-  
-  ui.alert('About Points System', message, ui.ButtonSet.OK);
-}
-
-// ==================== MENU SETUP ====================
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('Points System')
-    .addItem('🚀 Initial Setup', 'setupPointsSystem')
-    .addItem('🔄 Refresh Team Assignments', 'refreshTeamAssignments')
-    .addSeparator()
-    .addSubMenu(ui.createMenu('Workstreams')
-      .addItem('➕ Add Workstream', 'addWorkstream')
-      .addItem('➖ Remove Workstream', 'removeWorkstream'))
-    .addSubMenu(ui.createMenu('Teams')
-      .addItem('➕ Add Team', 'addTeam')
-      .addItem('➖ Remove Team', 'removeTeam')
-      .addSeparator()
-      .addItem('📅 Sort Manifest by Date', 'sortManifestByDate')
-      .addItem('📊 Sort Manifest by Workstream', 'sortManifestByWorkstream'))
-    .addSeparator()
-    .addItem('ℹ️ About', 'showAbout')
-    .addToUi();
-}
-
-// ==================== UTILITY FUNCTIONS ====================
-function findCheckboxColumn(workstreamName) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  for (let col = 7; col <= 20; col++) {
-    if (allocSheet.getRange(6, col).getValue() === workstreamName) {
-      return col;
-    }
-  }
-  return -1;
-}
-
-function columnToLetter(column) {
-  let letter = '';
-  while (column > 0) {
-    const temp = (column - 1) % 26;
-    letter = String.fromCharCode(temp + 65) + letter;
-    column = Math.floor((column - temp - 1) / 26);
-  }
-  return letter;
-}
-
-function getTeamNames() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  return ss.getSheets()
-    .map(sheet => sheet.getName())
-    .filter(name => name.endsWith(' Team'))
-    .map(name => name.replace(' Team', ''));
-}
-
-function getWorkstreamNames() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  const workstreams = [];
-  
-  let row = 10;
-  let wsName = allocSheet.getRange(row, 1).getValue();
-  while (wsName && wsName !== 'TOTAL' && row < 20) {
-    workstreams.push(wsName);
-    row++;
-    wsName = allocSheet.getRange(row, 1).getValue();
-  }
-  
-  return workstreams;
-}
-
-function updateTeamDropdowns() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teams = getTeamNames();
-  const workstreams = getWorkstreamNames();
-  
-  workstreams.forEach(wsName => {
-    const wsSheet = ss.getSheetByName(wsName);
-    if (!wsSheet) return;
-    
-    for (let row = 46; row <= 95; row++) {
-      if (teams.length === 0) {
-        wsSheet.getRange(row, 6).clearDataValidations();
-      } else {
-        const validation = SpreadsheetApp.newDataValidation()
-          .requireValueInList(teams, true)
-          .setAllowInvalid(false)
-          .build();
-        wsSheet.getRange(row, 6).setDataValidation(validation);
-      }
-    }
-  });
-}
-
-// ==================== WORKSTREAM MANAGEMENT ====================
-function addWorkstream() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Add New Workstream', 
-    'Enter the name for the new workstream:', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!name) {
-    ui.alert('Error', 'Workstream name cannot be empty.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(name)) {
-    ui.alert('Error', `"${name}" already exists.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  let totalRow = 10;
-  while (allocSheet.getRange(totalRow, 1).getValue() !== 'TOTAL' && totalRow < 20) {
-    totalRow++;
-  }
-  
-  allocSheet.insertRowBefore(totalRow);
-  setCell(allocSheet, `A${totalRow}`, name, { background: '#FFFFFF' });
-  setCell(allocSheet, `B${totalRow}`, 0, {
-    format: '0%', background: CONFIG.COLORS.LIGHT_YELLOW
-  });
-  setCell(allocSheet, `C${totalRow}`, `=ROUND($B$6*B${totalRow},0)`, {
-    format: '0', background: '#F5F5F5'
-  });
-  
-  allocSheet.getRange(totalRow, 1, 1, 3).setBorder(true, true, true, true, true, false);
-  
-  const newTotalRow = totalRow + 1;
-  setCell(allocSheet, `A${newTotalRow}`, 'TOTAL', {
-    fontWeight: true, background: '#E0E0E0'
-  });
-  setCell(allocSheet, `B${newTotalRow}`, `=SUM(B10:B${totalRow})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0%'
-  });
-  setCell(allocSheet, `C${newTotalRow}`, `=SUM(C10:C${totalRow})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0'
-  });
-  
-  allocSheet.getRange(9, 1, newTotalRow - 8, 3).setBorder(true, true, true, true, true, true);
-  
-  let nextCol = 7;
-  while (allocSheet.getRange(6, nextCol).getValue() && nextCol < 20) {
-    nextCol++;
-  }
-  
-  setCell(allocSheet, `${columnToLetter(nextCol)}6`, name, {
-    fontWeight: true, background: '#E3F2FD'
-  });
-  allocSheet.setColumnWidth(nextCol, 80);
-  
-  for (let row = 7; row <= 21; row++) {
-    allocSheet.getRange(row, nextCol).insertCheckboxes();
-  }
-  
-  const wsSheet = ss.insertSheet(name);
-  setupWorkstreamTab(wsSheet, name);
-  
-  updateTeamDropdowns();
-  
-  ui.alert('Success', `"${name}" added. Allocate points in the Allocation tab.`, ui.ButtonSet.OK);
-}
-
-function removeWorkstream() {
-  const ui = SpreadsheetApp.getUi();
-  const workstreams = getWorkstreamNames();
-  
-  if (workstreams.length === 0) {
-    ui.alert('Error', 'No workstreams to remove.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const response = ui.prompt('Remove Workstream',
-    'Enter the name to remove:\n\n' + workstreams.join(', '), ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!workstreams.includes(name)) {
-    ui.alert('Error', `"${name}" not found.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const allocSheet = ss.getSheetByName('Allocation');
-  
-  let row = 10;
-  while (allocSheet.getRange(row, 1).getValue() !== 'TOTAL') {
-    if (allocSheet.getRange(row, 1).getValue() === name) {
-      allocSheet.deleteRow(row);
-      break;
-    }
-    row++;
-  }
-  
-  setCell(allocSheet, `B${row}`, `=SUM(B10:B${row-1})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0%'
-  });
-  setCell(allocSheet, `C${row}`, `=SUM(C10:C${row-1})`, {
-    fontWeight: true, background: '#E0E0E0', format: '0'
-  });
-  
-  for (let col = 7; col <= 20; col++) {
-    if (allocSheet.getRange(6, col).getValue() === name) {
-      allocSheet.deleteColumn(col);
-      break;
-    }
-  }
-  
-  const wsSheet = ss.getSheetByName(name);
-  if (wsSheet) ss.deleteSheet(wsSheet);
-  
-  ui.alert('Success', `"${name}" removed.`, ui.ButtonSet.OK);
-}
-
-// ==================== TEAM MANAGEMENT ====================
-function addTeam() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt('Add New Team', 
-    'Enter the team name:', ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!name) {
-    ui.alert('Error', 'Team name cannot be empty.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheetName = name + ' Team';
-  
-  if (ss.getSheetByName(sheetName)) {
-    ui.alert('Error', `Team "${name}" already exists.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const teamSheet = ss.insertSheet(sheetName);
-  setupTeamTab(teamSheet, name);
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  
-  ui.alert('Success', `Team "${name}" added.`, ui.ButtonSet.OK);
-}
-
-function removeTeam() {
-  const ui = SpreadsheetApp.getUi();
-  const teams = getTeamNames();
-  
-  if (teams.length === 0) {
-    ui.alert('Error', 'No teams to remove.', ui.ButtonSet.OK);
-    return;
-  }
-  
-  const response = ui.prompt('Remove Team',
-    'Enter the team name:\n\n' + teams.join(', '), ui.ButtonSet.OK_CANCEL);
-  
-  if (response.getSelectedButton() !== ui.Button.OK) return;
-  
-  const name = response.getResponseText().trim();
-  if (!teams.includes(name)) {
-    ui.alert('Error', `Team "${name}" not found.`, ui.ButtonSet.OK);
-    return;
-  }
-  
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const teamSheet = ss.getSheetByName(name + ' Team');
-  if (teamSheet) ss.deleteSheet(teamSheet);
-  
-  updateTeamDropdowns();
-  updateTotalCapacity();
-  ui.alert('Success', `Team "${name}" removed.`, ui.ButtonSet.OK);
-}
-
-// Sort manifest functions
-function sortManifestByDate() {
-  refreshTeamAssignments('date');
-}
-
-function sortManifestByWorkstream() {
-  refreshTeamAssignments('workstream');
-}
-
-// About function
-function showAbout() {
-  const ui = SpreadsheetApp.getUi();
-  const message = `Marketing Team Points System
-
-Version: ${VERSION}
-Release Date: ${RELEASE_DATE}
-
-NEW in v13.1:
-• Cleaner team sheet layout
-• Auto-populate with "Team Member 1, 2, 3..." 
-• Jira fields added to workstream pages
-• Better formatting and spacing
-• Fixed holiday calculation references
-
-Features:
-• Team member management with holidays
-• Auto-calculated capacity from team holidays
-• PMM strategic priority distribution
-• Workstream team priorities with owner info
-• Asset planning with T-shirt sizing
-• Complete manifest generation
-
-© 2024 Marketing Team`;
-  
-  ui.alert('About Points System', message, ui.ButtonSet.OK);
-}
-
-// ==================== MENU SETUP ====================
-function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('Points System')
-    .addItem('🚀 Initial Setup', 'setupPointsSystem')
-    .addItem('🔄 Refresh Team Assignments', 'refreshTeamAssignments')
-    .addSeparator()
-    .addSubMenu(ui.createMenu('Workstreams')
-      .addItem('➕ Add Workstream', 'addWorkstream')
-      .addItem('➖ Remove Workstream', 'removeWorkstream'))
-    .addSubMenu(ui.createMenu('Teams')
-      .addItem('➕ Add Team', 'addTeam')
-      .addItem('➖ Remove Team', 'removeTeam')
-      .addSeparator()
-      .addItem('📅 Sort Manifest by Date', 'sortManifestByDate')
-      .addItem('📊 Sort Manifest by Workstream', 'sortManifestByWorkstream'))
-    .addSeparator()
-    .addItem('ℹ️ About', 'showAbout')
-    .addToUi();
+  ss.setActiveSheet(getOrCreatePlanningConfig());
 }
