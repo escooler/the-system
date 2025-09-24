@@ -1,10 +1,12 @@
 /**
- * Fixed Test Data Script for Points System v12.2
+ * Fixed Test Data Script for Points System v13.1
  * 
- * FIXED: Team initiatives now properly trigger point calculations
- * - Ensures t-shirt size values are set correctly
- * - Forces formula recalculation after data population
- * - Matches the fix used for workstream assets
+ * UPDATES FOR v13.1:
+ * - Fixed team-initiated work row references (now starts at row 65 instead of 64)
+ * - Adjusted team manifest row references (now starts at row 16 instead of 17)
+ * - Updated clearing ranges to match new layout
+ * - No fake team member names (user will fill manually)
+ * - Same test data content, just fixed row positioning
  */
 
 // ==================== TEST DATA CONFIGURATION ====================
@@ -146,13 +148,11 @@ const TEST_DATA = {
       { desc: 'Creative Process Optimization', size: 'XS', goLiveDays: 15 }
     ],
     'Performance': [
-      { desc: 'Q1 Analytics Audit', size: 'S', goLiveDays: 25 },
-      
+      { desc: 'Q1 Analytics Audit', size: 'S', goLiveDays: 25 }
     ],
     'Content': [
       { desc: 'Editorial Calendar System', size: 'S', goLiveDays: 22 },
-      { desc: 'Content Style Guide Update', size: 'M', goLiveDays: 14 },
-      
+      { desc: 'Content Style Guide Update', size: 'M', goLiveDays: 14 }
     ]
   }
 };
@@ -268,18 +268,25 @@ function clearAllData() {
       if (sheetName.endsWith(' Team')) {
         // Clear team configurations (but not formulas)
         sheet.getRange('B4').clearContent();  // Team members
-        sheet.getRange('B5').clearContent();  // Days off
+        sheet.getRange('B5').clearContent();  // Days off (this is now a formula, don't clear)
         sheet.getRange('B6').clearContent();  // Buffer %
         sheet.getRange('B7').clearContent();  // Creative planning
         sheet.getRange('D4').setValue(20);    // Reset to default working days
         
-        // Clear team assignments (manifest area)
-        sheet.getRange('A14:F60').clearContent();
+        // Clear team assignments (manifest area) - UPDATED ROW RANGE
+        sheet.getRange('A16:F63').clearContent();
         
-        // Clear team initiatives - only B and C columns (A has origin, D has formula, E has date, F has source)
-        for (let row = 62; row <= 91; row++) {
+        // Clear team initiatives - UPDATED to start at row 65 (not 62)
+        for (let row = 65; row <= 94; row++) {
           sheet.getRange(`B${row}`).clearContent();  // Description
           sheet.getRange(`C${row}`).clearContent();  // T-shirt size
+        }
+        
+        // Clear team member details but keep "Team Member 1, 2, 3..." structure
+        for (let row = 5; row <= 14; row++) {
+          sheet.getRange(`H${row}`).clearContent();  // Email
+          sheet.getRange(`I${row}`).clearContent();  // Jira Username
+          sheet.getRange(`J${row}`).setValue(0);     // Holiday days (reset to 0)
         }
       }
     });
@@ -319,7 +326,7 @@ function setupTestTeams(ss) {
     // Configure team settings
     teamSheet.getRange('B4').setValue(teamData.members);
     teamSheet.getRange('D4').setValue(teamData.workingDays);
-    teamSheet.getRange('B5').setValue(teamData.daysOff);
+    // Don't set B5 as it's now a calculated field from team member holidays
     teamSheet.getRange('B6').setValue(teamData.bufferPercent);
     teamSheet.getRange('B7').setValue(teamData.creativePlanning);
   });
@@ -435,6 +442,7 @@ function addWorkstreamAssets(ss) {
 
 /**
  * FIXED: Team initiatives now properly trigger point calculations
+ * UPDATED: Now starts at row 65 instead of 62
  */
 function addTeamInitiatives(ss) {
   const currentDate = new Date();
@@ -443,8 +451,8 @@ function addTeamInitiatives(ss) {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    // Clear existing initiatives - only clear content, not formulas or validations
-    for (let row = 62; row <= 91; row++) {
+    // Clear existing initiatives - UPDATED ROW RANGE
+    for (let row = 65; row <= 94; row++) {
       teamSheet.getRange(`B${row}`).clearContent();  // Description
       teamSheet.getRange(`C${row}`).clearContent();  // T-shirt size
       // Don't clear A, D, E, F as they contain formulas/defaults
@@ -452,7 +460,7 @@ function addTeamInitiatives(ss) {
     
     // Add new initiatives
     TEST_DATA.TEAM_INITIATIVES[teamName].forEach((initiative, index) => {
-      const row = 62 + index;
+      const row = 65 + index;
       
       // Calculate go-live date
       const goLiveDate = new Date(currentDate);
