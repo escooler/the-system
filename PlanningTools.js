@@ -1,11 +1,11 @@
 /**
- * Planning Tools - Fixed Version 8.1
+ * Planning Tools - Fixed Version 8.2
  * 
  * FIXES:
- * - Planning data now replaces manifest data (rows 16+)
- * - Removed redundant team size from config - reads from team sheets instead
- * - Added real team member names and stakeholder tracking
- * - Extended headers to 10 columns for better Jira integration
+ * - Uses "Team Member X" as the actual assignee names instead of generating "Person X"
+ * - Simplified team member name retrieval
+ * - Fixed dropdown validation issues
+ * - Names can be updated later and will work with refresh
  */
 
 // ==================== CONSTANTS ====================
@@ -91,7 +91,7 @@ function installPlanningTools() {
   
   SpreadsheetApp.getUi().alert(
     'Planning Tools Installed!',
-    'Version 8.1 - Fixed integration with Points System',
+    'Version 8.2 - Simplified team member handling',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -130,7 +130,6 @@ function setupConfigSheet(sheet) {
   sheet.setColumnWidth(2, 200);
   sheet.setColumnWidth(3, 250);
   
-  // Simplified config - removed redundant team size
   const values = [
     ['PLANNING CONFIGURATION', '', ''],
     ['', '', ''],
@@ -178,7 +177,7 @@ function readConfig(configSheet) {
   };
 }
 
-// ==================== TEAM HELPER FUNCTIONS ====================
+// ==================== SIMPLIFIED TEAM HELPER FUNCTIONS ====================
 function getTeamSizeFromSheet(teamSheet) {
   // Read team size from B4 in the team sheet
   const teamSize = parseInt(teamSheet.getRange('B4').getValue()) || 5;
@@ -186,22 +185,23 @@ function getTeamSizeFromSheet(teamSheet) {
 }
 
 function getTeamMemberNames(teamSheet) {
+  const teamSize = getTeamSizeFromSheet(teamSheet);
   const teamMembers = [];
-  // Read team member names from G5:G14 (Team Member rows)
+  
+  // Read actual names from G5:G14, but always use "Team Member X" as the base
   const memberData = teamSheet.getRange('G5:G14').getValues();
   
-  memberData.forEach(row => {
-    const name = row[0];
-    if (name && name.toString().trim() !== '' && !name.toString().includes('Team Member')) {
-      teamMembers.push(name.toString().trim());
-    }
-  });
-  
-  // If no custom names found, create default Person 1, Person 2, etc.
-  if (teamMembers.length === 0) {
-    const teamSize = getTeamSizeFromSheet(teamSheet);
-    for (let i = 1; i <= teamSize; i++) {
-      teamMembers.push(`Person ${i}`);
+  for (let i = 0; i < teamSize; i++) {
+    const customName = memberData[i] ? memberData[i][0] : '';
+    
+    // If there's a custom name and it's not the default "Team Member X", use it
+    // Otherwise use the default "Team Member X" format
+    if (customName && 
+        customName.toString().trim() !== '' && 
+        !customName.toString().trim().startsWith('Team Member')) {
+      teamMembers.push(customName.toString().trim());
+    } else {
+      teamMembers.push(`Team Member ${i + 1}`);
     }
   }
   
@@ -209,7 +209,7 @@ function getTeamMemberNames(teamSheet) {
 }
 
 function getStakeholder(origin) {
-  // Map workstreams to stakeholders - you can customize this mapping
+  // Map workstreams to stakeholders
   const stakeholderMap = {
     'SoMe': 'Social Media Manager',
     'PUA': 'Performance Marketing Lead', 
@@ -274,7 +274,6 @@ function applyPlanning(planningType) {
       const netCapacity = teamSheet.getRange('D7').getValue() || 0;
       applySprints(teamSheet, manifestItems, netCapacity, config);
     } else {
-      // Read team size from team sheet instead of config
       const teamSize = getTeamSizeFromSheet(teamSheet);
       const netCapacity = teamSheet.getRange('D7').getValue() || 0;
       applyWaterfall(teamSheet, manifestItems, teamSize, netCapacity, config.startDate);
@@ -330,12 +329,12 @@ function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
   const capacityPerPerson = Math.round(netCapacity / teamSize);
   const teamMemberNames = getTeamMemberNames(teamSheet);
   
-  // Initialize team members with actual names
+  // Initialize team members - use the names directly from getTeamMemberNames
   const teamMembers = [];
   for (let i = 0; i < teamSize; i++) {
     teamMembers.push({
       number: i + 1,
-      name: teamMemberNames[i] || `Person ${i + 1}`,
+      name: teamMemberNames[i], // This will be "Team Member X" or custom name
       items: [],
       totalPoints: 0,
       capacity: capacityPerPerson,
@@ -361,7 +360,7 @@ function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
     
     item.endDate = addWorkingDays(item.startDate, workingDays - 1);
     item.assignedPerson = person.number;
-    item.assigneeName = person.name;
+    item.assigneeName = person.name; // Use the actual name (Team Member X or custom)
     item.stakeholder = getStakeholder(item.origin);
     
     person.items.push(item);
@@ -372,7 +371,7 @@ function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
   // Write to sheet (in manifest area)
   writeGroupsToSheet(teamSheet, teamMembers, 'Person', capacityPerPerson);
   
-  // Add dropdowns with team member names
+  // Add dropdowns with the actual team member names
   addDropdowns(teamSheet, items.length, teamMemberNames);
 }
 
@@ -405,7 +404,7 @@ function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
     const icon = utilization > 100 ? '🔥' : '✅';
     const headerText = groupType === 'Sprint' ?
       `--- ${teamName.toUpperCase()} SPRINT ${group.number} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---` :
-      `--- ${group.name || `PERSON ${group.number}`} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---`;
+      `--- ${group.name} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---`;
     
     // Add header row (now 10 columns)
     outputData.push([headerText, '', '', '', '', '', '', '', '', '']);
@@ -420,7 +419,7 @@ function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
     });
     
     group.items.forEach(item => {
-      const assignment = groupType === 'Sprint' ? `Sprint ${group.number}` : (item.assigneeName || group.name || `Person ${group.number}`);
+      const assignment = groupType === 'Sprint' ? `Sprint ${group.number}` : group.name;
       const stakeholder = item.stakeholder || getStakeholder(item.origin);
       const color = getGroupColor(groupType, group.number);
       
@@ -599,7 +598,7 @@ function refreshPlanningDisplay() {
     // Check for planning data in the manifest area (now checking 10 columns)
     const planningCheck = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 7, 10, 1).getValues();
     const hasPlan = planningCheck.some(row => 
-      row[0] && (row[0].toString().includes('Sprint') || row[0].toString().includes('Person') || row[0].toString().trim() !== '')
+      row[0] && (row[0].toString().includes('Sprint') || row[0].toString().includes('Team Member') || row[0].toString().trim() !== '')
     );
     
     if (!hasPlan) return;
@@ -664,8 +663,14 @@ function refreshPlanningDisplay() {
     // Write back
     writeGroupsToSheet(teamSheet, groupArray, groupType, groupCapacity);
     
-    // Restore dropdowns
-    const options = groupArray.map(g => g.name);
+    // Restore dropdowns - use current team member names for consistency
+    let options;
+    if (isSprint) {
+      options = groupArray.map(g => g.name);
+    } else {
+      // Re-read team member names to ensure consistency
+      options = getTeamMemberNames(teamSheet);
+    }
     addDropdowns(teamSheet, items.length, options);
     
     refreshCount++;
