@@ -1,11 +1,6 @@
 /**
- * Planning Tools - Fixed Version 8.2
- * 
- * FIXES:
- * - Uses "Team Member X" as the actual assignee names instead of generating "Person X"
- * - Simplified team member name retrieval
- * - Fixed dropdown validation issues
- * - Names can be updated later and will work with refresh
+ * Planning Tools - Version 9.0
+ * Added Assignee field to sprint planning for Jira export preparation
  */
 
 // ==================== CONSTANTS ====================
@@ -15,9 +10,8 @@ const PLANNING_CONFIG = {
   SPRINT_DURATIONS: ['1 week', '2 weeks', '1 month'],
   DEFAULT_FIRST_SPRINT: 1,
   WORKING_DAYS_PER_WEEK: 5,
-  // Planning replaces manifest data but preserves headers
-  MANIFEST_START_ROW: 16, // First data row after headers
-  MAX_MANIFEST_ROWS: 47, // 61 - 14
+  MANIFEST_START_ROW: 16,
+  MAX_MANIFEST_ROWS: 47,
   COLORS: {
     HEADER: '#4285F4',
     CONFIG_BG: '#F5F5F5',
@@ -46,25 +40,20 @@ function addWorkingDays(startDate, workingDays) {
   
   const result = new Date(startDate);
   let totalDays = 0;
-  let weekends = 0;
   
-  // Calculate full weeks
   const fullWeeks = Math.floor(workingDays / 5);
   totalDays += fullWeeks * 7;
   
-  // Calculate remaining days
   let remainingDays = workingDays % 5;
   const startDay = result.getDay();
   
-  // Check if remaining days cross a weekend
   if (startDay + remainingDays > 5) {
-    weekends = (startDay === 0) ? 1 : 2;
+    totalDays += (startDay === 0) ? 1 : 2;
   }
   
-  totalDays += remainingDays + weekends;
+  totalDays += remainingDays;
   result.setDate(result.getDate() + totalDays);
   
-  // Ensure we don't land on a weekend
   while (result.getDay() === 0 || result.getDay() === 6) {
     result.setDate(result.getDate() + 1);
   }
@@ -74,14 +63,12 @@ function addWorkingDays(startDate, workingDays) {
 
 // ==================== INSTALLATION ====================
 function installPlanningTools() {
-  // Remove existing triggers
   ScriptApp.getProjectTriggers().forEach(trigger => {
     if (trigger.getHandlerFunction() === 'createPlanningMenu') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
   
-  // Create new trigger
   ScriptApp.newTrigger('createPlanningMenu')
     .forSpreadsheet(SpreadsheetApp.getActive())
     .onOpen()
@@ -91,7 +78,7 @@ function installPlanningTools() {
   
   SpreadsheetApp.getUi().alert(
     'Planning Tools Installed!',
-    'Version 8.2 - Simplified team member handling',
+    'Version 9.0 - Sprint planning now includes assignee field',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -124,8 +111,6 @@ function getOrCreatePlanningConfig() {
 
 function setupConfigSheet(sheet) {
   sheet.clear();
-  
-  // Set column widths
   sheet.setColumnWidths(1, 3, 150);
   sheet.setColumnWidth(2, 200);
   sheet.setColumnWidth(3, 250);
@@ -141,14 +126,12 @@ function setupConfigSheet(sheet) {
   
   sheet.getRange(1, 1, values.length, 3).setValues(values);
   
-  // Format header
   sheet.getRange('A1:C1').merge()
     .setFontSize(14)
     .setFontWeight('bold')
     .setBackground(PLANNING_CONFIG.COLORS.HEADER)
     .setFontColor('#FFFFFF');
   
-  // Add validations
   const methodValidation = SpreadsheetApp.newDataValidation()
     .requireValueInList(['Sprint', 'Waterfall'], true)
     .build();
@@ -159,11 +142,9 @@ function setupConfigSheet(sheet) {
     .build();
   sheet.getRange('B4').setDataValidation(durationValidation);
   
-  // Format config cells
   sheet.getRange('B3:B6').setBackground(PLANNING_CONFIG.COLORS.CONFIG_BG);
   sheet.getRange('B6').setNumberFormat('yyyy-MM-dd');
   sheet.getRange('C6').setFontStyle('italic').setFontSize(9);
-  
   sheet.getRange(3, 1, 4, 2).setBorder(true, true, true, true, true, true);
 }
 
@@ -177,27 +158,19 @@ function readConfig(configSheet) {
   };
 }
 
-// ==================== SIMPLIFIED TEAM HELPER FUNCTIONS ====================
+// ==================== TEAM HELPER FUNCTIONS ====================
 function getTeamSizeFromSheet(teamSheet) {
-  // Read team size from B4 in the team sheet
-  const teamSize = parseInt(teamSheet.getRange('B4').getValue()) || 5;
-  return teamSize;
+  return parseInt(teamSheet.getRange('B4').getValue()) || 5;
 }
 
 function getTeamMemberNames(teamSheet) {
   const teamSize = getTeamSizeFromSheet(teamSheet);
   const teamMembers = [];
-  
-  // Read actual names from G5:G14, but always use "Team Member X" as the base
   const memberData = teamSheet.getRange('G5:G14').getValues();
   
   for (let i = 0; i < teamSize; i++) {
     const customName = memberData[i] ? memberData[i][0] : '';
-    
-    // If there's a custom name and it's not the default "Team Member X", use it
-    // Otherwise use the default "Team Member X" format
-    if (customName && 
-        customName.toString().trim() !== '' && 
+    if (customName && customName.toString().trim() !== '' && 
         !customName.toString().trim().startsWith('Team Member')) {
       teamMembers.push(customName.toString().trim());
     } else {
@@ -209,23 +182,33 @@ function getTeamMemberNames(teamSheet) {
 }
 
 function getStakeholder(origin) {
-  // Map workstreams to stakeholders
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // First check if it's a workstream - get actual owner name from workstream sheet
+  const wsSheet = ss.getSheetByName(origin);
+  if (wsSheet) {
+    const ownerName = wsSheet.getRange('G2').getValue();
+    if (ownerName && ownerName.toString().trim() !== '') {
+      return ownerName.toString().trim();
+    }
+  }
+  
+  // Fallback to role name if no owner specified
   const stakeholderMap = {
-    'SoMe': 'Social Media Manager',
-    'PUA': 'Performance Marketing Lead', 
-    'ASO': 'ASO Specialist',
-    'Portal': 'Product Owner',
+    'SoMe': 'SoMe Owner',
+    'PUA': 'PUA Owner', 
+    'ASO': 'ASO Owner',
+    'Portal': 'Portal Owner',
     'Creative': 'Creative Director',
     'Content': 'Content Lead',
     'Performance': 'Performance Lead'
   };
   
-  return stakeholderMap[origin] || 'Product Marketing Manager';
+  return stakeholderMap[origin] || 'PMM';
 }
 
 function getTeamNames() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  return ss.getSheets()
+  return SpreadsheetApp.getActiveSpreadsheet().getSheets()
     .filter(sheet => sheet.getName().endsWith(' Team'))
     .map(sheet => sheet.getName().replace(' Team', ''));
 }
@@ -249,8 +232,8 @@ function applyPlanning(planningType) {
   
   const configSheet = getOrCreatePlanningConfig();
   const config = readConfig(configSheet);
-  
   const teams = getTeamNames();
+  
   if (teams.length === 0) {
     SpreadsheetApp.getUi().alert('No team sheets found.');
     return;
@@ -265,11 +248,9 @@ function applyPlanning(planningType) {
     const manifestItems = collectManifestItems(teamSheet);
     if (manifestItems.length === 0) return;
     
-    // Clear and setup planning area
     clearPlanningAreas(teamSheet);
     addPlanningHeaders(teamSheet, planningType);
     
-    // Apply planning based on type
     if (planningType === 'Sprint') {
       const netCapacity = teamSheet.getRange('D7').getValue() || 0;
       applySprints(teamSheet, manifestItems, netCapacity, config);
@@ -284,8 +265,8 @@ function applyPlanning(planningType) {
   
   if (successCount > 0) {
     const message = planningType === 'Sprint' ? 
-      `Applied sprint planning to ${successCount} team(s).\n\nPlanning data replaces team manifest data.\nAdjust assignments using dropdowns and refresh to reorganize.` :
-      `Applied waterfall planning to ${successCount} team(s).\n\nPlanning data replaces team manifest data.\nAdjust assignments using dropdowns and refresh to reorganize.`;
+      `Applied sprint planning to ${successCount} team(s).\n\nUse assignee dropdowns to assign work to team members.\nLeave blank for no assignee (useful for Jira export).` :
+      `Applied waterfall planning to ${successCount} team(s).\n\nTeam members are pre-assigned based on capacity.\nAdjust assignments using dropdowns as needed.`;
     
     SpreadsheetApp.getUi().alert(`${planningType} Planning Applied`, message, SpreadsheetApp.getUi().ButtonSet.OK);
   }
@@ -297,7 +278,6 @@ function applySprints(teamSheet, items, netCapacity, config) {
   const totalPoints = items.reduce((sum, item) => sum + item.points, 0);
   const sprintsNeeded = Math.max(2, Math.ceil(totalPoints / sprintCapacity));
   
-  // Initialize sprints
   const sprints = [];
   for (let i = 0; i < sprintsNeeded; i++) {
     sprints.push({
@@ -310,31 +290,28 @@ function applySprints(teamSheet, items, netCapacity, config) {
     });
   }
   
-  // Add stakeholder info to items for sprint planning
   items.forEach(item => {
     item.stakeholder = getStakeholder(item.origin);
+    item.assigneeName = ''; // Start with no assignee for sprint planning
   });
   
-  // Distribute items
   distributeItems(items, sprints, 'sprint');
-  
-  // Write to sheet (in manifest area)
   writeGroupsToSheet(teamSheet, sprints, 'Sprint', sprintCapacity);
   
-  // Add dropdowns
-  addDropdowns(teamSheet, items.length, sprints.map(s => `Sprint ${s.number}`));
+  // Add both sprint and assignee dropdowns
+  const teamMembers = getTeamMemberNames(teamSheet);
+  addSprintAndAssigneeDropdowns(teamSheet, items.length, sprints.map(s => `Sprint ${s.number}`), teamMembers);
 }
 
 function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
   const capacityPerPerson = Math.round(netCapacity / teamSize);
   const teamMemberNames = getTeamMemberNames(teamSheet);
   
-  // Initialize team members - use the names directly from getTeamMemberNames
   const teamMembers = [];
   for (let i = 0; i < teamSize; i++) {
     teamMembers.push({
       number: i + 1,
-      name: teamMemberNames[i], // This will be "Team Member X" or custom name
+      name: teamMemberNames[i],
       items: [],
       totalPoints: 0,
       capacity: capacityPerPerson,
@@ -342,25 +319,21 @@ function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
     });
   }
   
-  // Distribute items with dates and assignee names
   items.forEach(item => {
-    // Find person with least load
     const person = teamMembers.reduce((min, p) => 
       p.totalPoints < min.totalPoints ? p : min
     );
     
-    // Calculate dates
     const workingDays = Math.max(1, Math.round(item.points));
     item.startDate = new Date(person.currentDate);
     
-    // Skip weekends for start
     while (item.startDate.getDay() === 0 || item.startDate.getDay() === 6) {
       item.startDate.setDate(item.startDate.getDate() + 1);
     }
     
     item.endDate = addWorkingDays(item.startDate, workingDays - 1);
     item.assignedPerson = person.number;
-    item.assigneeName = person.name; // Use the actual name (Team Member X or custom)
+    item.assigneeName = person.name;
     item.stakeholder = getStakeholder(item.origin);
     
     person.items.push(item);
@@ -368,27 +341,25 @@ function applyWaterfall(teamSheet, items, teamSize, netCapacity, startDate) {
     person.currentDate = addWorkingDays(item.endDate, 1);
   });
   
-  // Write to sheet (in manifest area)
   writeGroupsToSheet(teamSheet, teamMembers, 'Person', capacityPerPerson);
-  
-  // Add dropdowns with the actual team member names
-  addDropdowns(teamSheet, items.length, teamMemberNames);
+  addAssigneeDropdowns(teamSheet, items.length, teamMemberNames);
 }
 
 // ==================== HEADER AND WRITING FUNCTIONS ====================
 function addPlanningHeaders(teamSheet, planningType) {
-  const headerType = planningType === 'Sprint' ? 'Sprint' : 'Assignee';
+  // Sprint planning has Sprint + Assignee columns
+  // Waterfall planning has only Assignee column (no redundant "Person")
+  const headers = planningType === 'Sprint' ?
+    [['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source', 'Sprint', 'Assignee', 'Stakeholder', 'Start Date', 'End Date']] :
+    [['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source', 'Assignee', 'Stakeholder', 'Start Date', 'End Date']];
   
-  // Extended headers to include Assignee, Stakeholder, Sprint/Person, Start Date, End Date
-  const extendedHeaders = [['Origin', 'Description', 'T-Shirt Size', 'Points', 'Go Live Date', 'Source', headerType, 'Stakeholder', 'Start Date', 'End Date']];
+  const numColumns = planningType === 'Sprint' ? 11 : 10;
   
-  teamSheet.getRange(15, 1, 1, 10)
-    .setValues(extendedHeaders)
+  teamSheet.getRange(15, 1, 1, numColumns)
+    .setValues(headers)
     .setFontWeight('bold')
-    .setBackground(PLANNING_CONFIG.COLORS.PLANNING_HEADER);
-  
-  // Ensure proper borders on the extended header
-  teamSheet.getRange(15, 1, 1, 10).setBorder(true, true, true, true, true, true);
+    .setBackground(PLANNING_CONFIG.COLORS.PLANNING_HEADER)
+    .setBorder(true, true, true, true, true, true);
 }
 
 function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
@@ -396,22 +367,25 @@ function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
   const outputData = [];
   const formats = [];
   const backgrounds = [];
+  const isSprint = groupType === 'Sprint';
+  const numColumns = isSprint ? 11 : 10;
   
   groups.forEach(group => {
     if (group.items.length === 0) return;
     
     const utilization = Math.round((group.totalPoints / capacity) * 100);
     const icon = utilization > 100 ? '🔥' : '✅';
-    const headerText = groupType === 'Sprint' ?
+    const headerText = isSprint ?
       `--- ${teamName.toUpperCase()} SPRINT ${group.number} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---` :
       `--- ${group.name} (${group.totalPoints}/${capacity} pts - ${utilization}% ${icon}) ---`;
     
-    // Add header row (now 10 columns)
-    outputData.push([headerText, '', '', '', '', '', '', '', '', '']);
-    formats.push(['', '', '', '', '', '', '', '', '', '']);
-    backgrounds.push([PLANNING_CONFIG.COLORS.SEPARATOR, '', '', '', '', '', '', '', '', '']);
+    // Create empty row for header
+    const headerRow = new Array(numColumns).fill('');
+    headerRow[0] = headerText;
+    outputData.push(headerRow);
+    formats.push(new Array(numColumns).fill(''));
+    backgrounds.push([PLANNING_CONFIG.COLORS.SEPARATOR, ...new Array(numColumns - 1).fill('')]);
     
-    // Sort and add items
     group.items.sort((a, b) => {
       const dateA = a.goLiveDate || new Date('2099-12-31');
       const dateB = b.goLiveDate || new Date('2099-12-31');
@@ -419,54 +393,75 @@ function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
     });
     
     group.items.forEach(item => {
-      const assignment = groupType === 'Sprint' ? `Sprint ${group.number}` : group.name;
       const stakeholder = item.stakeholder || getStakeholder(item.origin);
       const color = getGroupColor(groupType, group.number);
       
-      outputData.push([
-        item.origin || '',
-        item.description || '',
-        item.size || '-',
-        item.points || 0,
-        item.goLiveDate || '',
-        item.source || '',
-        assignment,
-        stakeholder,
-        group.startDate || item.startDate || '',
-        group.endDate || item.endDate || ''
-      ]);
+      let itemRow;
+      let formatRow;
+      let bgRow;
       
-      formats.push(['', '', '', '0', 'yyyy-MM-dd', '', '', '', 'yyyy-MM-dd', 'yyyy-MM-dd']);
-      backgrounds.push(['', '', '', '', '', '', color, '', color, color]);
+      if (isSprint) {
+        // Sprint planning: has Sprint column + Assignee column
+        itemRow = [
+          item.origin || '',
+          item.description || '',
+          item.size || '-',
+          item.points || 0,
+          item.goLiveDate || '',
+          item.source || '',
+          `Sprint ${group.number}`,
+          item.assigneeName || '',
+          stakeholder,
+          group.startDate || item.startDate || '',
+          group.endDate || item.endDate || ''
+        ];
+        formatRow = ['', '', '', '0', 'yyyy-MM-dd', '', '', '', '', 'yyyy-MM-dd', 'yyyy-MM-dd'];
+        bgRow = ['', '', '', '', '', '', color, '', '', color, color];
+      } else {
+        // Waterfall planning: only Assignee column (no redundant Person column)
+        itemRow = [
+          item.origin || '',
+          item.description || '',
+          item.size || '-',
+          item.points || 0,
+          item.goLiveDate || '',
+          item.source || '',
+          item.assigneeName || '',
+          stakeholder,
+          item.startDate || '',
+          item.endDate || ''
+        ];
+        formatRow = ['', '', '', '0', 'yyyy-MM-dd', '', '', '', 'yyyy-MM-dd', 'yyyy-MM-dd'];
+        bgRow = ['', '', '', '', '', '', color, '', color, color];
+      }
+      
+      outputData.push(itemRow);
+      formats.push(formatRow);
+      backgrounds.push(bgRow);
     });
     
-    // Add spacing
     if (outputData.length < PLANNING_CONFIG.MAX_MANIFEST_ROWS - 2) {
-      outputData.push(['', '', '', '', '', '', '', '', '', '']);
-      formats.push(['', '', '', '', '', '', '', '', '', '']);
-      backgrounds.push(['', '', '', '', '', '', '', '', '', '']);
+      outputData.push(new Array(numColumns).fill(''));
+      formats.push(new Array(numColumns).fill(''));
+      backgrounds.push(new Array(numColumns).fill(''));
     }
   });
   
-  // Write all data at once to manifest area (now 10 columns)
   if (outputData.length > 0) {
     const maxRows = Math.min(outputData.length, PLANNING_CONFIG.MAX_MANIFEST_ROWS);
-    const range = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, maxRows, 10);
+    const range = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, maxRows, numColumns);
     range.setValues(outputData.slice(0, maxRows));
     
-    // Apply formats and backgrounds efficiently
     for (let i = 0; i < maxRows; i++) {
       const row = PLANNING_CONFIG.MANIFEST_START_ROW + i;
       
-      // Merge header rows
       if (outputData[i][0].startsWith('---')) {
-        teamSheet.getRange(row, 1, 1, 10).merge()
+        teamSheet.getRange(row, 1, 1, numColumns).merge()
           .setFontWeight('bold')
           .setFontStyle('italic');
       }
       
-      // Apply formats where needed
-      for (let col = 0; col < 10; col++) {
+      for (let col = 0; col < numColumns; col++) {
         if (formats[i][col]) {
           teamSheet.getRange(row, col + 1).setNumberFormat(formats[i][col]);
         }
@@ -476,20 +471,70 @@ function writeGroupsToSheet(teamSheet, groups, groupType, capacity) {
       }
     }
     
-    // Apply border
     range.setBorder(true, true, true, true, true, false);
   }
 }
 
 function clearPlanningAreas(teamSheet) {
-  // Clear only the manifest data area, preserving headers (rows 13-15) - now 10 columns
-  teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 10).clear();
-  teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 10).clearDataValidations();
+  // Clear both 10 and 11 column ranges to handle both sprint and waterfall layouts
+  teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 11).clear();
+  teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 11).clearDataValidations();
+}
+
+// ==================== DROPDOWN FUNCTIONS ====================
+function addSprintAndAssigneeDropdowns(teamSheet, itemCount, sprintOptions, assigneeOptions) {
+  if (sprintOptions.length === 0 || assigneeOptions.length === 0) return;
+  
+  const sprintValidation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(sprintOptions, true)
+    .setAllowInvalid(false)
+    .build();
+  
+  const assigneeOptionsWithNone = ['None', ...assigneeOptions];
+  const assigneeValidation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(assigneeOptionsWithNone, true)
+    .setAllowInvalid(false)
+    .build();
+  
+  let applied = 0;
+  const startRow = PLANNING_CONFIG.MANIFEST_START_ROW;
+  const endRow = Math.min(startRow + PLANNING_CONFIG.MAX_MANIFEST_ROWS, startRow + itemCount * 2);
+  
+  for (let row = startRow; row <= endRow; row++) {
+    const desc = teamSheet.getRange(row, 2).getValue();
+    if (desc && !desc.toString().startsWith('---')) {
+      teamSheet.getRange(row, 7).setDataValidation(sprintValidation); // Sprint column
+      teamSheet.getRange(row, 8).setDataValidation(assigneeValidation); // Assignee column
+      applied++;
+      if (applied >= itemCount) break;
+    }
+  }
+}
+
+function addAssigneeDropdowns(teamSheet, itemCount, assigneeOptions) {
+  if (assigneeOptions.length === 0) return;
+  
+  const validation = SpreadsheetApp.newDataValidation()
+    .requireValueInList(assigneeOptions, true)
+    .setAllowInvalid(false)
+    .build();
+  
+  let applied = 0;
+  const startRow = PLANNING_CONFIG.MANIFEST_START_ROW;
+  const endRow = Math.min(startRow + PLANNING_CONFIG.MAX_MANIFEST_ROWS, startRow + itemCount * 2);
+  
+  for (let row = startRow; row <= endRow; row++) {
+    const desc = teamSheet.getRange(row, 2).getValue();
+    if (desc && !desc.toString().startsWith('---')) {
+      teamSheet.getRange(row, 7).setDataValidation(validation); // Assignee is now column 7 for waterfall
+      applied++;
+      if (applied >= itemCount) break;
+    }
+  }
 }
 
 // ==================== HELPER FUNCTIONS ====================
 function collectManifestItems(teamSheet) {
-  // Collect items from the team manifest area (rows 16-63)
   const data = teamSheet.getRange(16, 1, 47, 6).getValues();
   const items = [];
   
@@ -510,37 +555,13 @@ function collectManifestItems(teamSheet) {
   return items;
 }
 
-function addDropdowns(teamSheet, itemCount, options) {
-  if (options.length === 0) return;
-  
-  const validation = SpreadsheetApp.newDataValidation()
-    .requireValueInList(options, true)
-    .setAllowInvalid(false)
-    .build();
-  
-  let applied = 0;
-  const startRow = PLANNING_CONFIG.MANIFEST_START_ROW;
-  const endRow = Math.min(startRow + PLANNING_CONFIG.MAX_MANIFEST_ROWS, startRow + itemCount * 2);
-  
-  for (let row = startRow; row <= endRow; row++) {
-    const desc = teamSheet.getRange(row, 2).getValue();
-    if (desc && !desc.toString().startsWith('---')) {
-      teamSheet.getRange(row, 7).setDataValidation(validation);
-      applied++;
-      if (applied >= itemCount) break;
-    }
-  }
-}
-
 function distributeItems(items, containers, containerType) {
-  // Sort by priority
   items.sort((a, b) => {
     const dateA = a.goLiveDate || new Date('2099-12-31');
     const dateB = b.goLiveDate || new Date('2099-12-31');
     return dateA - dateB;
   });
   
-  // Simple load balancing
   items.forEach(item => {
     const container = containers.reduce((min, c) => 
       c.totalPoints < min.totalPoints ? c : min
@@ -595,40 +616,61 @@ function refreshPlanningDisplay() {
     const teamSheet = ss.getSheetByName(teamName + ' Team');
     if (!teamSheet) return;
     
-    // Check for planning data in the manifest area (now checking 10 columns)
+    // Check for planning data - could be 10 or 11 columns
     const planningCheck = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 7, 10, 1).getValues();
-    const hasPlan = planningCheck.some(row => 
-      row[0] && (row[0].toString().includes('Sprint') || row[0].toString().includes('Team Member') || row[0].toString().trim() !== '')
-    );
+    const hasPlan = planningCheck.some(row => row[0] && row[0].toString().trim() !== '');
     
     if (!hasPlan) return;
     
-    // Collect items efficiently from manifest area (now 10 columns)
-    const manifestData = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 10).getValues();
+    // Try to detect if it's sprint or waterfall by checking column 7
+    const firstDataRow = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 7, 1, 1).getValue();
+    const isSprint = firstDataRow && firstDataRow.toString().includes('Sprint');
+    const numColumns = isSprint ? 11 : 10;
+    
+    const manifestData = teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, numColumns).getValues();
     const items = [];
     
     for (let i = 0; i < manifestData.length; i++) {
       const row = manifestData[i];
-      if (row[1] && !row[1].toString().includes('---') && row[6]) {
-        items.push({
-          rowIndex: i,
-          origin: row[0],
-          description: row[1],
-          size: row[2],
-          points: row[3],
-          goLiveDate: row[4],
-          source: row[5],
-          assignment: row[6],
-          stakeholder: row[7],
-          startDate: row[8],
-          endDate: row[9]
-        });
+      if (row[1] && !row[1].toString().includes('---')) {
+        if (isSprint && row[6]) {
+          // Sprint planning: has Sprint + Assignee
+          items.push({
+            rowIndex: i,
+            origin: row[0],
+            description: row[1],
+            size: row[2],
+            points: row[3],
+            goLiveDate: row[4],
+            source: row[5],
+            assignment: row[6],
+            assigneeName: row[7] === 'None' ? '' : row[7],
+            stakeholder: row[8],
+            startDate: row[9],
+            endDate: row[10]
+          });
+        } else if (!isSprint && row[6]) {
+          // Waterfall planning: only Assignee (no Person column)
+          items.push({
+            rowIndex: i,
+            origin: row[0],
+            description: row[1],
+            size: row[2],
+            points: row[3],
+            goLiveDate: row[4],
+            source: row[5],
+            assignment: row[6], // This is the assignee name for grouping
+            assigneeName: row[6],
+            stakeholder: row[7],
+            startDate: row[8],
+            endDate: row[9]
+          });
+        }
       }
     }
     
     if (items.length === 0) return;
     
-    // Group and reorganize
     const groups = {};
     items.forEach(item => {
       if (!groups[item.assignment]) {
@@ -637,10 +679,8 @@ function refreshPlanningDisplay() {
       groups[item.assignment].push(item);
     });
     
-    // Clear and rewrite manifest area (now 10 columns)
-    teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 10).clear();
+    teamSheet.getRange(PLANNING_CONFIG.MANIFEST_START_ROW, 1, PLANNING_CONFIG.MAX_MANIFEST_ROWS, 11).clear();
     
-    // Convert groups to array format for reuse
     const groupArray = Object.keys(groups)
       .sort((a, b) => {
         const numA = parseInt(a.match(/\d+/)?.[0] || '0');
@@ -649,29 +689,24 @@ function refreshPlanningDisplay() {
       })
       .map(key => ({
         number: parseInt(key.match(/\d+/)?.[0] || '1'),
-        name: key, // Keep the actual assignee name
+        name: key,
         items: groups[key],
         totalPoints: groups[key].reduce((sum, item) => sum + (item.points || 0), 0)
       }));
     
-    // Determine type and capacity
-    const isSprint = items[0].assignment.includes('Sprint');
     const groupType = isSprint ? 'Sprint' : 'Person';
     const netCapacity = teamSheet.getRange('D7').getValue() || 100;
     const groupCapacity = Math.round(netCapacity / groupArray.length);
     
-    // Write back
     writeGroupsToSheet(teamSheet, groupArray, groupType, groupCapacity);
     
-    // Restore dropdowns - use current team member names for consistency
-    let options;
+    const teamMembers = getTeamMemberNames(teamSheet);
     if (isSprint) {
-      options = groupArray.map(g => g.name);
+      const sprintOptions = groupArray.map(g => g.name);
+      addSprintAndAssigneeDropdowns(teamSheet, items.length, sprintOptions, teamMembers);
     } else {
-      // Re-read team member names to ensure consistency
-      options = getTeamMemberNames(teamSheet);
+      addAssigneeDropdowns(teamSheet, items.length, teamMembers);
     }
-    addDropdowns(teamSheet, items.length, options);
     
     refreshCount++;
   });
@@ -708,6 +743,5 @@ function clearAllPlanning() {
 }
 
 function openPlanningSettings() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.setActiveSheet(getOrCreatePlanningConfig());
+  SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(getOrCreatePlanningConfig());
 }
